@@ -31,13 +31,30 @@ app.get('/health', async (req, res) => {
 });
 
 /* -------------------------------------------
-   GET ALL ENSEMBLES
+   GET ENSEMBLES (optionally by director)
 -------------------------------------------- */
 app.get('/ensembles', async (req, res) => {
+  const { directorId } = req.query;
+
   try {
-    const result = await pool.query(
-      'SELECT id, name, type, organization_name, created_at FROM ensembles ORDER BY id'
-    );
+    let result;
+
+    if (directorId) {
+      result = await pool.query(
+        `SELECT id, name, type, organization_name, created_at, director_id
+         FROM ensembles
+         WHERE director_id = $1
+         ORDER BY id`,
+        [directorId]
+      );
+    } else {
+      result = await pool.query(
+        `SELECT id, name, type, organization_name, created_at, director_id
+         FROM ensembles
+         ORDER BY id`
+      );
+    }
+
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching ensembles:', err.message);
@@ -49,18 +66,20 @@ app.get('/ensembles', async (req, res) => {
    CREATE ENSEMBLE
 -------------------------------------------- */
 app.post('/ensembles', async (req, res) => {
-  const { name, type, organization_name } = req.body;
+  const { name, type, organization_name, director_id } = req.body;
 
-  if (!name || !type) {
-    return res.status(400).json({ error: 'name and type are required' });
+  if (!name || !type || !director_id) {
+    return res.status(400).json({
+      error: 'name, type, and director_id are required',
+    });
   }
 
   try {
     const result = await pool.query(
-      `INSERT INTO ensembles (name, type, organization_name)
-       VALUES ($1, $2, $3)
-       RETURNING id, name, type, organization_name, created_at`,
-      [name, type, organization_name || null]
+      `INSERT INTO ensembles (name, type, organization_name, director_id)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, type, organization_name, director_id, created_at`,
+      [name, type, organization_name || null, director_id]
     );
 
     res.status(201).json(result.rows[0]);
@@ -93,10 +112,8 @@ app.post('/auth/signup-director', async (req, res) => {
       return res.status(400).json({ error: 'Email already in use' });
     }
 
-    // Hash password (we can change this later if needed)
     const passwordHash = await bcrypt.hash(password, 10);
 
-    // Insert user
     const result = await pool.query(
       `
       INSERT INTO users (first_name, last_name, email, password_hash, role)
@@ -118,8 +135,6 @@ app.post('/auth/signup-director', async (req, res) => {
     });
   } catch (err) {
     console.error('Error in /auth/signup-director:', err);
-
-    // 🔥 DEV MODE: send the real error message back so we can see it in the UI
     res.status(500).json({
       error: err.message || 'Internal server error',
     });
@@ -133,3 +148,4 @@ const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Opus API listening on port ${port}`);
 });
+
