@@ -6,8 +6,25 @@ const bcrypt = require('bcryptjs');
 const { pool } = require('./db');
 
 const app = express();
-app.use(cors());
+
+// CORS configuration for Vercel frontend
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*',
+  credentials: true
+}));
+
 app.use(express.json());
+
+/* -------------------------------------------
+   ROOT ENDPOINT
+-------------------------------------------- */
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Opus Backend API',
+    status: 'running',
+    endpoints: ['/health', '/ensembles', '/auth/signup-director']
+  });
+});
 
 /* -------------------------------------------
    HEALTH CHECK
@@ -115,11 +132,9 @@ app.post('/auth/signup-director', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
 
     const result = await pool.query(
-      `
-      INSERT INTO users (first_name, last_name, email, password_hash, role)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, first_name, last_name, email, role, created_at
-      `,
+      `INSERT INTO users (first_name, last_name, email, password_hash, role)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, first_name, last_name, email, role, created_at`,
       [firstName, lastName, email, passwordHash, finalRole]
     );
 
@@ -142,7 +157,8 @@ app.post('/auth/signup-director', async (req, res) => {
 });
 
 /* -------------------------------------------
-   CREATE A NEW DIRECTOR (SIGNUP)
+   CREATE A NEW DIRECTOR (SIGNUP) - DUPLICATE ENDPOINT
+   NOTE: This is redundant with /auth/signup-director
 -------------------------------------------- */
 app.post('/directors/signup', async (req, res) => {
   const { firstName, lastName, email, password, role } = req.body;
@@ -165,7 +181,6 @@ app.post('/directors/signup', async (req, res) => {
   } catch (err) {
     console.error('Error creating director:', err.message);
     if (err.code === '23505') {
-      // unique_violation on email, if you added a unique index
       return res.status(409).json({ error: 'Email already in use' });
     }
     res.status(500).json({ error: 'Failed to create director' });
@@ -173,10 +188,17 @@ app.post('/directors/signup', async (req, res) => {
 });
 
 /* -------------------------------------------
-   START SERVER
+   404 HANDLER
 -------------------------------------------- */
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Opus API listening on port ${port}`);
+app.use((req, res) => {
+  res.status(404).json({ error: 'Endpoint not found' });
 });
 
+/* -------------------------------------------
+   START SERVER
+-------------------------------------------- */
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Opus API listening on port ${PORT}`);
+  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+});
