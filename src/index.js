@@ -7,13 +7,9 @@ const { pool } = require('./db');
 
 const app = express();
 
-// CORS
-const allowedOrigin = process.env.FRONTEND_URL || '*';
-app.use(cors({
-  origin: allowedOrigin,
-  credentials: true
-}));
-app.use(express.json());
+// CORS - TEMP while validating multiple Vercel preview URLs
+app.use(cors({ origin: true, credentials: true }));
+
 
 // Root
 app.get('/', (req, res) => {
