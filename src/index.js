@@ -2,8 +2,8 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
-const bcrypt = require('bcryptjs');          // <-- bcrypt
-const { pool } = require('./db');            // <-- database pool
+const bcrypt = require('bcryptjs');
+const { pool } = require('./db');
 
 const app = express();
 app.use(cors());
@@ -83,7 +83,7 @@ app.post('/auth/signup-director', async (req, res) => {
 
     const finalRole = role || 'director';
 
-    // Check if email already exists
+    // ✅ FIXED: use id, not id0
     const existing = await pool.query(
       'SELECT id FROM users WHERE email = $1',
       [email]
@@ -93,10 +93,8 @@ app.post('/auth/signup-director', async (req, res) => {
       return res.status(400).json({ error: 'Email already in use' });
     }
 
-    // Hash password
     const passwordHash = await bcrypt.hash(password, 10);
 
-    // Insert user
     const result = await pool.query(
       `
       INSERT INTO users (first_name, last_name, email, password_hash, role)
