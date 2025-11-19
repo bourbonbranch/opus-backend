@@ -83,7 +83,7 @@ app.post('/auth/signup-director', async (req, res) => {
 
     const finalRole = role || 'director';
 
-    // ✅ FIXED: use id, not id0
+    // Check if email already exists
     const existing = await pool.query(
       'SELECT id FROM users WHERE email = $1',
       [email]
@@ -93,8 +93,10 @@ app.post('/auth/signup-director', async (req, res) => {
       return res.status(400).json({ error: 'Email already in use' });
     }
 
+    // Hash password (we can change this later if needed)
     const passwordHash = await bcrypt.hash(password, 10);
 
+    // Insert user
     const result = await pool.query(
       `
       INSERT INTO users (first_name, last_name, email, password_hash, role)
@@ -116,7 +118,11 @@ app.post('/auth/signup-director', async (req, res) => {
     });
   } catch (err) {
     console.error('Error in /auth/signup-director:', err);
-    res.status(500).json({ error: 'Internal server error' });
+
+    // 🔥 DEV MODE: send the real error message back so we can see it in the UI
+    res.status(500).json({
+      error: err.message || 'Internal server error',
+    });
   }
 });
 
