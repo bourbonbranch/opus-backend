@@ -1,6 +1,11 @@
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config();
+
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*',
+  credentials: true
+}));
+
 
 const bcrypt = require('bcryptjs');
 const { pool } = require('./db');
