@@ -142,6 +142,37 @@ app.post('/auth/signup-director', async (req, res) => {
 });
 
 /* -------------------------------------------
+   CREATE A NEW DIRECTOR (SIGNUP)
+-------------------------------------------- */
+app.post('/directors/signup', async (req, res) => {
+  const { firstName, lastName, email, password, role } = req.body;
+
+  if (!firstName || !lastName || !email || !password) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const hashed = await bcrypt.hash(password, 10);
+
+    const result = await pool.query(
+      `INSERT INTO users (first_name, last_name, email, password_hash, role)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, first_name, last_name, email, role, created_at`,
+      [firstName, lastName, email, hashed, role || 'director']
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating director:', err.message);
+    if (err.code === '23505') {
+      // unique_violation on email, if you added a unique index
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+    res.status(500).json({ error: 'Failed to create director' });
+  }
+});
+
+/* -------------------------------------------
    START SERVER
 -------------------------------------------- */
 const port = process.env.PORT || 3000;
