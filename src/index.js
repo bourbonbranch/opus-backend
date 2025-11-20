@@ -562,6 +562,628 @@ app.post('/messages', async (req, res) => {
   }
 });
 
+// --- TICKETS SYSTEM ---
+
+// ========== EVENTS ==========
+
+// Get all events for a director
+app.get('/events', async (req, res) => {
+  const { director_id } = req.query;
+  if (!director_id) return res.status(400).json({ error: 'director_id required' });
+
+  try {
+    const result = await pool.query(
+      `SELECT e.*, 
+        (SELECT COUNT(*) FROM performances p WHERE p.event_id = e.id) as performance_count,
+        (SELECT COALESCE(SUM(o.total), 0) FROM orders o WHERE o.event_id = e.id AND o.status = 'completed') as total_revenue
+       FROM events e
+       WHERE e.director_id = $1
+       ORDER BY e.created_at DESC`,
+      [director_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching events:', err);
+    res.status(500).json({ error: 'Failed to fetch events' });
+  }
+});
+
+// Get single event
+app.get('/events/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('SELECT * FROM events WHERE id = $1', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error fetching event:', err);
+    res.status(500).json({ error: 'Failed to fetch event' });
+  }
+});
+
+// Create event
+app.post('/events', async (req, res) => {
+  const {
+    director_id,
+    ensemble_id,
+    title,
+    subtitle,
+    description,
+    program_notes,
+    venue_name,
+    venue_address,
+    parking_instructions,
+    dress_code,
+    status = 'draft'
+  } = req.body;
+
+  if (!director_id || !title) {
+    return res.status(400).json({ error: 'director_id and title required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO events (director_id, ensemble_id, title, subtitle, description, program_notes, venue_name, venue_address, parking_instructions, dress_code, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *`,
+      [director_id, ensemble_id, title, subtitle, description, program_notes, venue_name, venue_address, parking_instructions, dress_code, status]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating event:', err);
+    res.status(500).json({ error: 'Failed to create event' });
+  }
+});
+
+// Update event
+app.put('/events/:id', async (req, res) => {
+  const { id } = req.params;
+  const {
+    title,
+    subtitle,
+    description,
+    program_notes,
+    venue_name,
+    venue_address,
+    parking_instructions,
+    dress_code,
+    status
+  } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE events
+       SET title = COALESCE($1, title),
+           subtitle = COALESCE($2, subtitle),
+           description = COALESCE($3, description),
+           program_notes = COALESCE($4, program_notes),
+           venue_name = COALESCE($5, venue_name),
+           venue_address = COALESCE($6, venue_address),
+           parking_instructions = COALESCE($7, parking_instructions),
+           dress_code = COALESCE($8, dress_code),
+           status = COALESCE($9, status),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $10
+       RETURNING *`,
+      [title, subtitle, description, program_notes, venue_name, venue_address, parking_instructions, dress_code, status, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating event:', err);
+    res.status(500).json({ error: 'Failed to update event' });
+  }
+});
+
+// Delete event
+app.delete('/events/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM events WHERE id = $1 RETURNING id', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    res.json({ message: 'Event deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting event:', err);
+    res.status(500).json({ error: 'Failed to delete event' });
+  }
+});
+
+// ========== PERFORMANCES ==========
+
+// Get performances for an event
+app.get('/performances', async (req, res) => {
+  const { event_id } = req.query;
+  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+
+  try {
+    const result = await pool.query(
+      `SELECT p.*,
+        (SELECT COUNT(*) FROM orders o WHERE o.performance_id = p.id AND o.status = 'completed') as tickets_sold
+       FROM performances p
+       WHERE p.event_id = $1
+       ORDER BY p.performance_date, p.start_time`,
+      [event_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching performances:', err);
+    res.status(500).json({ error: 'Failed to fetch performances' });
+  }
+});
+
+// Create performance
+app.post('/performances', async (req, res) => {
+  const { event_id, performance_date, doors_open_time, start_time, end_time, capacity } = req.body;
+
+  if (!event_id || !performance_date || !start_time) {
+    return res.status(400).json({ error: 'event_id, performance_date, and start_time required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO performances (event_id, performance_date, doors_open_time, start_time, end_time, capacity)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [event_id, performance_date, doors_open_time, start_time, end_time, capacity]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating performance:', err);
+    res.status(500).json({ error: 'Failed to create performance' });
+  }
+});
+
+// Update performance
+app.put('/performances/:id', async (req, res) => {
+  const { id } = req.params;
+  const { performance_date, doors_open_time, start_time, end_time, capacity } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE performances
+       SET performance_date = COALESCE($1, performance_date),
+           doors_open_time = COALESCE($2, doors_open_time),
+           start_time = COALESCE($3, start_time),
+           end_time = COALESCE($4, end_time),
+           capacity = COALESCE($5, capacity)
+       WHERE id = $6
+       RETURNING *`,
+      [performance_date, doors_open_time, start_time, end_time, capacity, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Performance not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating performance:', err);
+    res.status(500).json({ error: 'Failed to update performance' });
+  }
+});
+
+// Delete performance
+app.delete('/performances/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM performances WHERE id = $1 RETURNING id', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Performance not found' });
+    }
+    res.json({ message: 'Performance deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting performance:', err);
+    res.status(500).json({ error: 'Failed to delete performance' });
+  }
+});
+
+// ========== TICKET TYPES ==========
+
+// Get ticket types for an event
+app.get('/ticket-types', async (req, res) => {
+  const { event_id } = req.query;
+  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM ticket_types WHERE event_id = $1 ORDER BY sort_order, id',
+      [event_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching ticket types:', err);
+    res.status(500).json({ error: 'Failed to fetch ticket types' });
+  }
+});
+
+// Create ticket type
+app.post('/ticket-types', async (req, res) => {
+  const { event_id, name, description, price, seating_type, quantity_available, is_public, sort_order } = req.body;
+
+  if (!event_id || !name || price === undefined) {
+    return res.status(400).json({ error: 'event_id, name, and price required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO ticket_types (event_id, name, description, price, seating_type, quantity_available, is_public, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [event_id, name, description, price, seating_type || 'general_admission', quantity_available, is_public !== false, sort_order || 0]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating ticket type:', err);
+    res.status(500).json({ error: 'Failed to create ticket type' });
+  }
+});
+
+// Update ticket type
+app.put('/ticket-types/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, description, price, seating_type, quantity_available, is_public, sort_order } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE ticket_types
+       SET name = COALESCE($1, name),
+           description = COALESCE($2, description),
+           price = COALESCE($3, price),
+           seating_type = COALESCE($4, seating_type),
+           quantity_available = COALESCE($5, quantity_available),
+           is_public = COALESCE($6, is_public),
+           sort_order = COALESCE($7, sort_order)
+       WHERE id = $8
+       RETURNING *`,
+      [name, description, price, seating_type, quantity_available, is_public, sort_order, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Ticket type not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating ticket type:', err);
+    res.status(500).json({ error: 'Failed to update ticket type' });
+  }
+});
+
+// Delete ticket type
+app.delete('/ticket-types/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM ticket_types WHERE id = $1 RETURNING id', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Ticket type not found' });
+    }
+    res.json({ message: 'Ticket type deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting ticket type:', err);
+    res.status(500).json({ error: 'Failed to delete ticket type' });
+  }
+});
+
+// ========== STUDENT SALE LINKS ==========
+
+// Generate student sale links for an event
+app.post('/events/:eventId/generate-student-links', async (req, res) => {
+  const { eventId } = req.params;
+
+  try {
+    // Get event details
+    const eventResult = await pool.query('SELECT * FROM events WHERE id = $1', [eventId]);
+    if (eventResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    const event = eventResult.rows[0];
+
+    // Get all students in the ensemble
+    const studentsResult = await pool.query(
+      'SELECT * FROM roster WHERE ensemble_id = $1 AND status = $2',
+      [event.ensemble_id, 'active']
+    );
+
+    if (studentsResult.rows.length === 0) {
+      return res.status(400).json({ error: 'No active students found in ensemble' });
+    }
+
+    const links = [];
+    const eventSlug = event.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 20);
+
+    for (const student of studentsResult.rows) {
+      // Generate unique code
+      const randomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+      const firstName = student.first_name.toLowerCase().replace(/[^a-z]+/g, '');
+      const lastName = student.last_name.toLowerCase().replace(/[^a-z]+/g, '');
+      const uniqueCode = `${eventSlug}-${firstName}-${lastName}-${randomCode}`;
+
+      // Insert or update link
+      const linkResult = await pool.query(
+        `INSERT INTO student_sale_links (event_id, roster_id, unique_code)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (unique_code) DO UPDATE SET unique_code = EXCLUDED.unique_code
+         RETURNING *`,
+        [eventId, student.id, uniqueCode]
+      );
+
+      links.push({
+        ...linkResult.rows[0],
+        student_name: `${student.first_name} ${student.last_name}`,
+        url: `/tickets/${uniqueCode}`
+      });
+    }
+
+    res.status(201).json(links);
+  } catch (err) {
+    console.error('Error generating student links:', err);
+    res.status(500).json({ error: 'Failed to generate student links' });
+  }
+});
+
+// Get student sale links for an event
+app.get('/student-sale-links', async (req, res) => {
+  const { event_id } = req.query;
+  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+
+  try {
+    const result = await pool.query(
+      `SELECT ssl.*, r.first_name, r.last_name,
+        (SELECT COUNT(*) FROM orders o WHERE o.student_sale_link_id = ssl.id AND o.status = 'completed') as sales_count,
+        (SELECT COALESCE(SUM(o.total), 0) FROM orders o WHERE o.student_sale_link_id = ssl.id AND o.status = 'completed') as total_revenue
+       FROM student_sale_links ssl
+       JOIN roster r ON ssl.roster_id = r.id
+       WHERE ssl.event_id = $1
+       ORDER BY r.last_name, r.first_name`,
+      [event_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching student sale links:', err);
+    res.status(500).json({ error: 'Failed to fetch student sale links' });
+  }
+});
+
+// Get event by student code (public)
+app.get('/student-sale-links/:code', async (req, res) => {
+  const { code } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT ssl.*, e.*, r.first_name as student_first_name, r.last_name as student_last_name
+       FROM student_sale_links ssl
+       JOIN events e ON ssl.event_id = e.id
+       JOIN roster r ON ssl.roster_id = r.id
+       WHERE ssl.unique_code = $1`,
+      [code]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Student sale link not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error fetching student sale link:', err);
+    res.status(500).json({ error: 'Failed to fetch student sale link' });
+  }
+});
+
+// ========== ORDERS ==========
+
+// Create order (public)
+app.post('/orders', async (req, res) => {
+  const {
+    event_id,
+    performance_id,
+    student_sale_link_id,
+    buyer_email,
+    buyer_name,
+    buyer_phone,
+    items, // [{ ticket_type_id, quantity }]
+    donation = 0,
+    stripe_payment_intent_id
+  } = req.body;
+
+  if (!event_id || !performance_id || !buyer_email || !buyer_name || !items || items.length === 0) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Calculate totals
+    let subtotal = 0;
+    const orderItems = [];
+
+    for (const item of items) {
+      const ticketTypeResult = await client.query(
+        'SELECT * FROM ticket_types WHERE id = $1',
+        [item.ticket_type_id]
+      );
+
+      if (ticketTypeResult.rows.length === 0) {
+        throw new Error(`Ticket type ${item.ticket_type_id} not found`);
+      }
+
+      const ticketType = ticketTypeResult.rows[0];
+      const itemSubtotal = ticketType.price * item.quantity;
+      subtotal += itemSubtotal;
+
+      orderItems.push({
+        ticket_type_id: item.ticket_type_id,
+        quantity: item.quantity,
+        unit_price: ticketType.price,
+        subtotal: itemSubtotal
+      });
+    }
+
+    // Simple fee calculation (3% + $0.30 per order)
+    const fees = (subtotal * 0.03) + 0.30;
+    const total = subtotal + fees + parseFloat(donation);
+
+    // Create order
+    const orderResult = await client.query(
+      `INSERT INTO orders (event_id, performance_id, student_sale_link_id, buyer_email, buyer_name, buyer_phone, subtotal, fees, donation, total, stripe_payment_intent_id, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *`,
+      [event_id, performance_id, student_sale_link_id, buyer_email, buyer_name, buyer_phone, subtotal, fees, donation, total, stripe_payment_intent_id, 'completed']
+    );
+
+    const order = orderResult.rows[0];
+
+    // Create order items with QR codes
+    for (const item of orderItems) {
+      for (let i = 0; i < item.quantity; i++) {
+        const qrCode = `ORDER-${order.id}-ITEM-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
+        await client.query(
+          `INSERT INTO order_items (order_id, ticket_type_id, quantity, unit_price, subtotal, qr_code)
+           VALUES ($1, $2, 1, $3, $4, $5)`,
+          [order.id, item.ticket_type_id, item.unit_price, item.unit_price, qrCode]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(order);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error creating order:', err);
+    res.status(500).json({ error: 'Failed to create order: ' + err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Get order by ID
+app.get('/orders/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const orderResult = await pool.query('SELECT * FROM orders WHERE id = $1', [id]);
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const itemsResult = await pool.query(
+      `SELECT oi.*, tt.name as ticket_type_name
+       FROM order_items oi
+       JOIN ticket_types tt ON oi.ticket_type_id = tt.id
+       WHERE oi.order_id = $1`,
+      [id]
+    );
+
+    res.json({
+      ...orderResult.rows[0],
+      items: itemsResult.rows
+    });
+  } catch (err) {
+    console.error('Error fetching order:', err);
+    res.status(500).json({ error: 'Failed to fetch order' });
+  }
+});
+
+// Get orders for an event
+app.get('/orders', async (req, res) => {
+  const { event_id } = req.query;
+  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+
+  try {
+    const result = await pool.query(
+      `SELECT o.*, p.performance_date, p.start_time
+       FROM orders o
+       JOIN performances p ON o.performance_id = p.id
+       WHERE o.event_id = $1
+       ORDER BY o.created_at DESC`,
+      [event_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching orders:', err);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+// ========== REPORTING ==========
+
+// Student sales report
+app.get('/reports/student-sales', async (req, res) => {
+  const { event_id } = req.query;
+  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+
+  try {
+    const result = await pool.query(
+      `SELECT 
+        r.id as roster_id,
+        r.first_name,
+        r.last_name,
+        r.section,
+        ssl.unique_code,
+        COUNT(o.id) as order_count,
+        COALESCE(SUM(o.total), 0) as total_revenue,
+        COALESCE(SUM((SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.order_id = o.id)), 0) as tickets_sold
+       FROM student_sale_links ssl
+       JOIN roster r ON ssl.roster_id = r.id
+       LEFT JOIN orders o ON o.student_sale_link_id = ssl.id AND o.status = 'completed'
+       WHERE ssl.event_id = $1
+       GROUP BY r.id, r.first_name, r.last_name, r.section, ssl.unique_code
+       ORDER BY total_revenue DESC, r.last_name, r.first_name`,
+      [event_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching student sales report:', err);
+    res.status(500).json({ error: 'Failed to fetch student sales report' });
+  }
+});
+
+// Event summary report
+app.get('/reports/event-summary', async (req, res) => {
+  const { event_id } = req.query;
+  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+
+  try {
+    const result = await pool.query(
+      `SELECT 
+        e.*,
+        COUNT(DISTINCT o.id) as total_orders,
+        COALESCE(SUM(o.total), 0) as total_revenue,
+        COALESCE(SUM(o.subtotal), 0) as ticket_revenue,
+        COALESCE(SUM(o.donation), 0) as donation_revenue,
+        COALESCE(SUM((SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.order_id = o.id)), 0) as tickets_sold
+       FROM events e
+       LEFT JOIN orders o ON o.event_id = e.id AND o.status = 'completed'
+       WHERE e.id = $1
+       GROUP BY e.id`,
+      [event_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error fetching event summary:', err);
+    res.status(500).json({ error: 'Failed to fetch event summary' });
+  }
+});
+
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {

@@ -1,16 +1,16 @@
 const { Pool } = require('pg');
 
-// Trying the internal URL provided by the user
-const connectionString = 'postgresql://postgres:fWqcmFWhdMovPTRUbQyqxcpxiIkvPDuY@postgres.railway.internal:5432/railway';
+// Using the Public Proxy URL provided by the user
+const connectionString = 'postgresql://postgres:fWqcmFWhdMovPTRUbQyqxcpxiIkvPDuY@crossover.proxy.rlwy.net:30557/railway';
 
 const pool = new Pool({
   connectionString: connectionString,
-  // ssl: { rejectUnauthorized: false }, // Internal might not need SSL, or might need it.
+  ssl: { rejectUnauthorized: false }, // Required for public proxy connection
 });
 
 async function addMessagesTables() {
   try {
-    console.log('Connecting to database (internal URL)...');
+    console.log('Connecting to database (Public Proxy)...');
 
     // Messages table
     await pool.query(`
