@@ -97,12 +97,15 @@ app.post('/auth/signup-director', async (req, res) => {
       createdAt: user.created_at,
     });
   } catch (err) {
-    console.error('Error in /auth/signup-director:', err);
-    res.status(500).json({ error: err.message || 'Internal server error' });
+    console.error('Error in /auth/signup-director:', err); // <-- log full error
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+    res.status(500).json({ error: err.message || 'Internal server error' }); // <-- return actual message
   }
 });
 
-// Duplicate legacy endpoint kept for compatibility
+// Legacy endpoint kept for compatibility
 app.post('/directors/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, password, role } = req.body;
@@ -113,6 +116,7 @@ app.post('/directors/signup', async (req, res) => {
     if (existing.rows.length > 0) {
       return res.status(409).json({ error: 'Email already in use' });
     }
+
     const hashed = await bcrypt.hash(password, 10);
     const result = await pool.query(
       `INSERT INTO users (first_name, last_name, email, password_hash, role)
@@ -122,11 +126,15 @@ app.post('/directors/signup', async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('Error creating director:', err);
-    if (err.code === '23505') return res.status(409).json({ error: 'Email already in use' });
-    res.status(500).json({ error: 'Failed to create director' });
+    console.error('Error in /directors/signup:', err); // <-- log full error
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+    // Bubble up actual DB error to help you debug on the client
+    return res.status(500).json({ error: err.message || 'Failed to create director' });
   }
 });
+
 
 // 404
 app.use((req, res) => {
