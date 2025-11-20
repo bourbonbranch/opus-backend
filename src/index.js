@@ -133,6 +133,65 @@ app.post('/ensembles', async (req, res) => {
   }
 });
 
+// --- ROSTER ROUTES ---
+
+// Get roster for an ensemble
+app.get('/roster', async (req, res) => {
+  const { ensemble_id } = req.query;
+
+  if (!ensemble_id) {
+    return res.status(400).json({ error: 'ensemble_id is required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, ensemble_id, first_name, last_name, email, phone, status, external_id, created_at
+       FROM roster
+       WHERE ensemble_id = $1
+       ORDER BY last_name, first_name`,
+      [ensemble_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching roster:', err);
+    res.status(500).json({ error: 'Failed to fetch roster' });
+  }
+});
+
+// Add a single roster member
+app.post('/roster', async (req, res) => {
+  const {
+    ensemble_id,
+    first_name,
+    last_name,
+    email,
+    phone,
+    status = 'active',
+    external_id = null,
+  } = req.body || {};
+
+  if (!ensemble_id || !first_name || !last_name) {
+    return res.status(400).json({
+      error: 'ensemble_id, first_name, and last_name are required',
+    });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO roster
+        (ensemble_id, first_name, last_name, email, phone, status, external_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, ensemble_id, first_name, last_name, email, phone, status, external_id, created_at`,
+      [ensemble_id, first_name, last_name, email || null, phone || null, status, external_id]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error inserting roster member:', err);
+    res.status(500).json({ error: 'Failed to add roster member' });
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
