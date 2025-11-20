@@ -230,6 +230,35 @@ app.post('/rooms', async (req, res) => {
   }
 });
 
+// Update a room (for calibration)
+app.put('/rooms/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, beacon_uuid, beacon_major, beacon_minor } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE rooms 
+       SET name = COALESCE($1, name),
+           beacon_uuid = COALESCE($2, beacon_uuid),
+           beacon_major = COALESCE($3, beacon_major),
+           beacon_minor = COALESCE($4, beacon_minor)
+       WHERE id = $5
+       RETURNING *`,
+      [name, beacon_uuid, beacon_major, beacon_minor, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating room:', err);
+    res.status(500).json({ error: 'Failed to update room' });
+  }
+});
+
+
 // Log attendance
 app.post('/attendance', async (req, res) => {
   const { roster_id, room_id, status } = req.body;
