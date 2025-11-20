@@ -192,6 +192,63 @@ app.post('/roster', async (req, res) => {
   }
 });
 
+// --- ROOMS & ATTENDANCE ---
+
+// Get rooms for a director
+app.get('/rooms', async (req, res) => {
+  const { director_id } = req.query;
+  if (!director_id) return res.status(400).json({ error: 'director_id required' });
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM rooms WHERE director_id = $1 ORDER BY created_at DESC',
+      [director_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching rooms:', err);
+    res.status(500).json({ error: 'Failed to fetch rooms' });
+  }
+});
+
+// Create a room
+app.post('/rooms', async (req, res) => {
+  const { name, director_id, beacon_uuid, beacon_major, beacon_minor } = req.body;
+  if (!name || !director_id) return res.status(400).json({ error: 'name and director_id required' });
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO rooms (name, director_id, beacon_uuid, beacon_major, beacon_minor)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [name, director_id, beacon_uuid || null, beacon_major || null, beacon_minor || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating room:', err);
+    res.status(500).json({ error: 'Failed to create room' });
+  }
+});
+
+// Log attendance
+app.post('/attendance', async (req, res) => {
+  const { roster_id, room_id, status } = req.body;
+  if (!roster_id || !room_id) return res.status(400).json({ error: 'roster_id and room_id required' });
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO attendance (roster_id, room_id, status)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [roster_id, room_id, status || 'present']
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error logging attendance:', err);
+    res.status(500).json({ error: 'Failed to log attendance' });
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
