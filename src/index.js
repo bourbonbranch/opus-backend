@@ -338,6 +338,78 @@ app.delete('/events/:id', async (req, res) => {
 });
 
 
+// --- CALENDAR ITEMS ---
+
+// Get calendar items for a director or ensemble
+app.get('/calendar-items', async (req, res) => {
+  const { director_id, ensemble_id } = req.query;
+
+  if (!director_id && !ensemble_id) {
+    return res.status(400).json({ error: 'director_id or ensemble_id required' });
+  }
+
+  try {
+    let query = 'SELECT * FROM calendar_items WHERE ';
+    let params = [];
+
+    if (ensemble_id) {
+      query += 'ensemble_id = $1';
+      params.push(ensemble_id);
+    } else {
+      query += 'director_id = $1';
+      params.push(director_id);
+    }
+
+    query += ' ORDER BY date ASC';
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching calendar items:', err);
+    res.status(500).json({ error: 'Failed to fetch calendar items' });
+  }
+});
+
+// Create a calendar item
+app.post('/calendar-items', async (req, res) => {
+  const { director_id, ensemble_id, title, type, date, description, color } = req.body;
+
+  if (!title || !type || !date) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO calendar_items (director_id, ensemble_id, title, type, date, description, color)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [director_id || null, ensemble_id || null, title, type, date, description || null, color || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating calendar item:', err);
+    res.status(500).json({ error: 'Failed to create calendar item' });
+  }
+});
+
+// Delete a calendar item
+app.delete('/calendar-items/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM calendar_items WHERE id = $1 RETURNING id', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Calendar item not found' });
+    }
+
+    res.json({ message: 'Calendar item deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting calendar item:', err);
+    res.status(500).json({ error: 'Failed to delete calendar item' });
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
