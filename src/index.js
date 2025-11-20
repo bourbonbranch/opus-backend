@@ -7,63 +7,20 @@ const { pool } = require('./db');
 
 const app = express();
 
+// ✅ BODY PARSER MUST COME FIRST (before CORS and routes)
+app.use(express.json());
+
 // CORS - TEMP while validating multiple Vercel preview URLs
 app.use(cors({ origin: true, credentials: true }));
-
 
 // Root
 app.get('/', (req, res) => {
   res.json({ ok: true, name: 'Opus API' });
 });
 
-// Health
-app.get('/health', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT NOW() AS now');
-    res.json({ ok: true, db: 'connected', time: result.rows[0].now });
-  } catch (err) {
-    console.error('Health check DB error:', err);
-    res.status(500).json({ ok: false, db: 'disconnected', error: err.message });
-  }
-});
-
-// Get ensembles (optional directorId)
-app.get('/ensembles', async (req, res) => {
-  const { directorId } = req.query;
-  try {
-    const sql = `
-      SELECT id, name, type, organization_name, created_at, director_id
-      FROM ensembles
-      ${directorId ? 'WHERE director_id = $1' : ''}
-      ORDER BY id
-    `;
-    const params = directorId ? [directorId] : [];
-    const result = await pool.query(sql, params);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Error fetching ensembles:', err);
-    res.status(500).json({ error: 'Failed to fetch ensembles' });
-  }
-});
-
-// Create ensemble
-app.post('/ensembles', async (req, res) => {
-  const { name, type, organization_name, director_id } = req.body;
-  if (!name || !type || !director_id) {
-    return res.status(400).json({ error: 'name, type, and director_id are required' });
-  }
-  try {
-    const result = await pool.query(
-      `INSERT INTO ensembles (name, type, organization_name, director_id)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, type, organization_name, director_id, created_at`,
-      [name, type, organization_name || null, director_id]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    console.error('Error creating ensemble:', err);
-    res.status(500).json({ error: 'Failed to create ensemble' });
-  }
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ ok: true, timestamp: new Date().toISOString() });
 });
 
 // Director signup (camelCase response)
@@ -97,11 +54,11 @@ app.post('/auth/signup-director', async (req, res) => {
       createdAt: user.created_at,
     });
   } catch (err) {
-    console.error('Error in /auth/signup-director:', err); // <-- log full error
+    console.error('Error in /auth/signup-director:', err);
     if (err.code === '23505') {
       return res.status(409).json({ error: 'Email already in use' });
     }
-    res.status(500).json({ error: err.message || 'Internal server error' }); // <-- return actual message
+    res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 
@@ -126,23 +83,58 @@ app.post('/directors/signup', async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('Error in /directors/signup:', err); // <-- log full error
+    console.error('Error in /directors/signup:', err);
     if (err.code === '23505') {
       return res.status(409).json({ error: 'Email already in use' });
     }
-    // Bubble up actual DB error to help you debug on the client
     return res.status(500).json({ error: err.message || 'Failed to create director' });
   }
 });
 
+// Get all ensembles for a director
+app.get('/ensembles', async (req, res) => {
+  try {
+    const directorId = req.query.director_id;
+    if (!directorId) {
+      return res.status(400).json({ error: 'director_id is required' });
+    }
 
-// 404
-app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint not found' });
+    const result = await pool.query(
+      'SELECT * FROM ensembles WHERE director_id = $1 ORDER BY created_at DESC',
+      [directorId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching ensembles:', err);
+    res.status(500).json({ error: 'Failed to fetch ensembles' });
+  }
 });
 
-// Start
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
+// Create a new ensemble
+app.post('/ensembles', async (req, res) => {
+  try {
+    const { name, type, organization_name, level, size, director_id } = req.body;
+
+    if (!name || !type || !director_id) {
+      return res.status(400).json({ error: 'Missing required fields: name, type, director_id' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO ensembles (name, type, organization_name, level, size, director_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [name, type, organization_name || null, level || null, size || null, director_id]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating ensemble:', err);
+    res.status(500).json({ error: 'Failed to create ensemble' });
+  }
+});
+
+// Start server
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
   console.log(`Opus API listening on port ${PORT}`);
 });
