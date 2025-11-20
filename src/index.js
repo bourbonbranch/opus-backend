@@ -574,8 +574,8 @@ app.get('/ticket-events', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT e.*, 
-        (SELECT COUNT(*) FROM performances p WHERE p.ticket_ticket_event_id = e.id) as performance_count,
-        (SELECT COALESCE(SUM(o.total), 0) FROM orders o WHERE o.ticket_ticket_event_id = e.id AND o.status = 'completed') as total_revenue
+        (SELECT COUNT(*) FROM performances p WHERE p.ticket_event_id = e.id) as performance_count,
+        (SELECT COALESCE(SUM(o.total), 0) FROM orders o WHERE o.ticket_event_id = e.id AND o.status = 'completed') as total_revenue
        FROM ticket_events e
        WHERE e.director_id = $1
        ORDER BY e.created_at DESC`,
