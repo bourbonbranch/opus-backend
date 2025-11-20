@@ -464,6 +464,104 @@ app.delete('/calendar-items/:id', async (req, res) => {
   }
 });
 
+// --- MESSAGES ---
+
+// TEMP: Migration endpoint to create tables
+app.get('/init-messages-db', async (req, res) => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS messages (
+        id SERIAL PRIMARY KEY,
+        director_id INTEGER REFERENCES users(id),
+        ensemble_id INTEGER REFERENCES ensembles(id),
+        subject TEXT NOT NULL,
+        content TEXT NOT NULL,
+        recipients_summary TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS message_recipients (
+        id SERIAL PRIMARY KEY,
+        message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+        roster_id INTEGER REFERENCES roster(id),
+        read_at TIMESTAMP,
+        UNIQUE(message_id, roster_id)
+      );
+    `);
+    res.json({ message: 'Messages tables created successfully' });
+  } catch (err) {
+    console.error('Migration error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get messages for a director
+app.get('/messages', async (req, res) => {
+  const { director_id } = req.query;
+  if (!director_id) return res.status(400).json({ error: 'director_id required' });
+
+  try {
+    const result = await pool.query(
+      `SELECT m.*, 
+        (SELECT COUNT(*) FROM message_recipients mr WHERE mr.message_id = m.id AND mr.read_at IS NOT NULL) as read_count,
+        (SELECT COUNT(*) FROM message_recipients mr WHERE mr.message_id = m.id) as total_count
+       FROM messages m
+       WHERE m.director_id = $1
+       ORDER BY m.created_at DESC`,
+      [director_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching messages:', err);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// Send a message
+app.post('/messages', async (req, res) => {
+  const { director_id, ensemble_id, subject, content, recipients_summary, recipient_ids } = req.body;
+
+  if (!director_id || !subject || !content || !recipient_ids) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Create message
+    const msgResult = await client.query(
+      `INSERT INTO messages (director_id, ensemble_id, subject, content, recipients_summary)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [director_id, ensemble_id || null, subject, content, recipients_summary || 'Recipients']
+    );
+    const message = msgResult.rows[0];
+
+    // 2. Add recipients
+    if (recipient_ids.length > 0) {
+      const values = recipient_ids.map((rid, idx) => `($1, $${idx + 2})`).join(',');
+      const params = [message.id, ...recipient_ids];
+
+      await client.query(
+        `INSERT INTO message_recipients (message_id, roster_id) VALUES ${values}`,
+        params
+      );
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(message);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error sending message:', err);
+    res.status(500).json({ error: 'Failed to send message' });
+  } finally {
+    client.release();
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
