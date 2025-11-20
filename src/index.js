@@ -249,6 +249,95 @@ app.post('/attendance', async (req, res) => {
   }
 });
 
+// --- EVENTS ---
+
+// Get events for an ensemble
+app.get('/events', async (req, res) => {
+  const { ensemble_id } = req.query;
+  if (!ensemble_id) return res.status(400).json({ error: 'ensemble_id required' });
+
+  try {
+    const result = await pool.query(
+      `SELECT e.*, r.name as room_name
+       FROM events e
+       LEFT JOIN rooms r ON e.room_id = r.id
+       WHERE e.ensemble_id = $1
+       ORDER BY e.start_time ASC`,
+      [ensemble_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching events:', err);
+    res.status(500).json({ error: 'Failed to fetch events' });
+  }
+});
+
+// Create a new event
+app.post('/events', async (req, res) => {
+  const { ensemble_id, room_id, name, type, start_time, end_time, description } = req.body;
+
+  if (!ensemble_id || !name || !type || !start_time || !end_time) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO events (ensemble_id, room_id, name, type, start_time, end_time, description)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [ensemble_id, room_id || null, name, type, start_time, end_time, description || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating event:', err);
+    res.status(500).json({ error: 'Failed to create event' });
+  }
+});
+
+// Update an event
+app.put('/events/:id', async (req, res) => {
+  const { id } = req.params;
+  const { room_id, name, type, start_time, end_time, description } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE events
+       SET room_id = $1, name = $2, type = $3, start_time = $4, end_time = $5, description = $6
+       WHERE id = $7
+       RETURNING *`,
+      [room_id || null, name, type, start_time, end_time, description || null, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating event:', err);
+    res.status(500).json({ error: 'Failed to update event' });
+  }
+});
+
+// Delete an event
+app.delete('/events/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM events WHERE id = $1 RETURNING id', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    res.json({ message: 'Event deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting event:', err);
+    res.status(500).json({ error: 'Failed to delete event' });
+  }
+});
+
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
