@@ -192,6 +192,46 @@ app.post('/roster', async (req, res) => {
   }
 });
 
+// Bulk add roster members
+app.post('/roster/bulk', async (req, res) => {
+  const { ensemble_id, students } = req.body;
+
+  if (!ensemble_id || !students || !Array.isArray(students)) {
+    return res.status(400).json({ error: 'ensemble_id and students array required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const results = [];
+    for (const student of students) {
+      const { first_name, last_name, email, phone, section, external_id } = student;
+
+      // Skip if missing required fields
+      if (!first_name || !last_name) continue;
+
+      const result = await client.query(
+        `INSERT INTO roster
+          (ensemble_id, first_name, last_name, email, phone, section, status, external_id)
+         VALUES ($1, $2, $3, $4, $5, $6, 'active', $7)
+         RETURNING *`,
+        [ensemble_id, first_name, last_name, email || null, phone || null, section || null, external_id || null]
+      );
+      results.push(result.rows[0]);
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(results);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error bulk inserting roster:', err);
+    res.status(500).json({ error: 'Failed to bulk import students: ' + err.message });
+  } finally {
+    client.release();
+  }
+});
+
 // --- ROOMS & ATTENDANCE ---
 
 // Get rooms for a director
