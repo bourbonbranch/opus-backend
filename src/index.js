@@ -564,19 +564,19 @@ app.post('/messages', async (req, res) => {
 
 // --- TICKETS SYSTEM ---
 
-// ========== EVENTS ==========
+// ========== TICKET EVENTS ==========
 
-// Get all events for a director
-app.get('/events', async (req, res) => {
+// Get all ticket events for a director
+app.get('/ticket-events', async (req, res) => {
   const { director_id } = req.query;
   if (!director_id) return res.status(400).json({ error: 'director_id required' });
 
   try {
     const result = await pool.query(
       `SELECT e.*, 
-        (SELECT COUNT(*) FROM performances p WHERE p.event_id = e.id) as performance_count,
-        (SELECT COALESCE(SUM(o.total), 0) FROM orders o WHERE o.event_id = e.id AND o.status = 'completed') as total_revenue
-       FROM events e
+        (SELECT COUNT(*) FROM performances p WHERE p.ticket_ticket_event_id = e.id) as performance_count,
+        (SELECT COALESCE(SUM(o.total), 0) FROM orders o WHERE o.ticket_ticket_event_id = e.id AND o.status = 'completed') as total_revenue
+       FROM ticket_events e
        WHERE e.director_id = $1
        ORDER BY e.created_at DESC`,
       [director_id]
@@ -588,12 +588,12 @@ app.get('/events', async (req, res) => {
   }
 });
 
-// Get single event
-app.get('/events/:id', async (req, res) => {
+// Get single ticket event
+app.get('/ticket-events/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const result = await pool.query('SELECT * FROM events WHERE id = $1', [id]);
+    const result = await pool.query('SELECT * FROM ticket_events WHERE id = $1', [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
@@ -604,8 +604,8 @@ app.get('/events/:id', async (req, res) => {
   }
 });
 
-// Create event
-app.post('/events', async (req, res) => {
+// Create ticket event
+app.post('/ticket-events', async (req, res) => {
   const {
     director_id,
     ensemble_id,
@@ -626,7 +626,7 @@ app.post('/events', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO events (director_id, ensemble_id, title, subtitle, description, program_notes, venue_name, venue_address, parking_instructions, dress_code, status)
+      `INSERT INTO ticket_events (director_id, ensemble_id, title, subtitle, description, program_notes, venue_name, venue_address, parking_instructions, dress_code, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [director_id, ensemble_id, title, subtitle, description, program_notes, venue_name, venue_address, parking_instructions, dress_code, status]
@@ -638,8 +638,8 @@ app.post('/events', async (req, res) => {
   }
 });
 
-// Update event
-app.put('/events/:id', async (req, res) => {
+// Update ticket event
+app.put('/ticket-events/:id', async (req, res) => {
   const { id } = req.params;
   const {
     title,
@@ -655,7 +655,7 @@ app.put('/events/:id', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `UPDATE events
+      `UPDATE ticket_events
        SET title = COALESCE($1, title),
            subtitle = COALESCE($2, subtitle),
            description = COALESCE($3, description),
@@ -682,12 +682,12 @@ app.put('/events/:id', async (req, res) => {
   }
 });
 
-// Delete event
-app.delete('/events/:id', async (req, res) => {
+// Delete ticket event
+app.delete('/ticket-events/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const result = await pool.query('DELETE FROM events WHERE id = $1 RETURNING id', [id]);
+    const result = await pool.query('DELETE FROM ticket_events WHERE id = $1 RETURNING id', [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
@@ -702,17 +702,17 @@ app.delete('/events/:id', async (req, res) => {
 
 // Get performances for an event
 app.get('/performances', async (req, res) => {
-  const { event_id } = req.query;
-  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+  const { ticket_event_id } = req.query;
+  if (!ticket_event_id) return res.status(400).json({ error: 'ticket_event_id required' });
 
   try {
     const result = await pool.query(
       `SELECT p.*,
         (SELECT COUNT(*) FROM orders o WHERE o.performance_id = p.id AND o.status = 'completed') as tickets_sold
        FROM performances p
-       WHERE p.event_id = $1
+       WHERE p.ticket_event_id = $1
        ORDER BY p.performance_date, p.start_time`,
-      [event_id]
+      [ticket_event_id]
     );
     res.json(result.rows);
   } catch (err) {
@@ -723,18 +723,18 @@ app.get('/performances', async (req, res) => {
 
 // Create performance
 app.post('/performances', async (req, res) => {
-  const { event_id, performance_date, doors_open_time, start_time, end_time, capacity } = req.body;
+  const { ticket_event_id, performance_date, doors_open_time, start_time, end_time, capacity } = req.body;
 
-  if (!event_id || !performance_date || !start_time) {
-    return res.status(400).json({ error: 'event_id, performance_date, and start_time required' });
+  if (!ticket_event_id || !performance_date || !start_time) {
+    return res.status(400).json({ error: 'ticket_event_id, performance_date, and start_time required' });
   }
 
   try {
     const result = await pool.query(
-      `INSERT INTO performances (event_id, performance_date, doors_open_time, start_time, end_time, capacity)
+      `INSERT INTO performances (ticket_event_id, performance_date, doors_open_time, start_time, end_time, capacity)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [event_id, performance_date, doors_open_time, start_time, end_time, capacity]
+      [ticket_event_id, performance_date, doors_open_time, start_time, end_time, capacity]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -792,13 +792,13 @@ app.delete('/performances/:id', async (req, res) => {
 
 // Get ticket types for an event
 app.get('/ticket-types', async (req, res) => {
-  const { event_id } = req.query;
-  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+  const { ticket_event_id } = req.query;
+  if (!ticket_event_id) return res.status(400).json({ error: 'ticket_event_id required' });
 
   try {
     const result = await pool.query(
-      'SELECT * FROM ticket_types WHERE event_id = $1 ORDER BY sort_order, id',
-      [event_id]
+      'SELECT * FROM ticket_types WHERE ticket_event_id = $1 ORDER BY sort_order, id',
+      [ticket_event_id]
     );
     res.json(result.rows);
   } catch (err) {
@@ -809,18 +809,18 @@ app.get('/ticket-types', async (req, res) => {
 
 // Create ticket type
 app.post('/ticket-types', async (req, res) => {
-  const { event_id, name, description, price, seating_type, quantity_available, is_public, sort_order } = req.body;
+  const { ticket_event_id, name, description, price, seating_type, quantity_available, is_public, sort_order } = req.body;
 
-  if (!event_id || !name || price === undefined) {
-    return res.status(400).json({ error: 'event_id, name, and price required' });
+  if (!ticket_event_id || !name || price === undefined) {
+    return res.status(400).json({ error: 'ticket_event_id, name, and price required' });
   }
 
   try {
     const result = await pool.query(
-      `INSERT INTO ticket_types (event_id, name, description, price, seating_type, quantity_available, is_public, sort_order)
+      `INSERT INTO ticket_types (ticket_event_id, name, description, price, seating_type, quantity_available, is_public, sort_order)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [event_id, name, description, price, seating_type || 'general_admission', quantity_available, is_public !== false, sort_order || 0]
+      [ticket_event_id, name, description, price, seating_type || 'general_admission', quantity_available, is_public !== false, sort_order || 0]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -878,13 +878,13 @@ app.delete('/ticket-types/:id', async (req, res) => {
 
 // ========== STUDENT SALE LINKS ==========
 
-// Generate student sale links for an event
-app.post('/events/:eventId/generate-student-links', async (req, res) => {
+// Generate student sale links for a ticket event
+app.post('/ticket-events/:eventId/generate-student-links', async (req, res) => {
   const { eventId } = req.params;
 
   try {
     // Get event details
-    const eventResult = await pool.query('SELECT * FROM events WHERE id = $1', [eventId]);
+    const eventResult = await pool.query('SELECT * FROM ticket_events WHERE id = $1', [eventId]);
     if (eventResult.rows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
@@ -912,7 +912,7 @@ app.post('/events/:eventId/generate-student-links', async (req, res) => {
 
       // Insert or update link
       const linkResult = await pool.query(
-        `INSERT INTO student_sale_links (event_id, roster_id, unique_code)
+        `INSERT INTO student_sale_links (ticket_event_id, roster_id, unique_code)
          VALUES ($1, $2, $3)
          ON CONFLICT (unique_code) DO UPDATE SET unique_code = EXCLUDED.unique_code
          RETURNING *`,
@@ -935,8 +935,8 @@ app.post('/events/:eventId/generate-student-links', async (req, res) => {
 
 // Get student sale links for an event
 app.get('/student-sale-links', async (req, res) => {
-  const { event_id } = req.query;
-  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+  const { ticket_event_id } = req.query;
+  if (!ticket_event_id) return res.status(400).json({ error: 'ticket_event_id required' });
 
   try {
     const result = await pool.query(
@@ -945,9 +945,9 @@ app.get('/student-sale-links', async (req, res) => {
         (SELECT COALESCE(SUM(o.total), 0) FROM orders o WHERE o.student_sale_link_id = ssl.id AND o.status = 'completed') as total_revenue
        FROM student_sale_links ssl
        JOIN roster r ON ssl.roster_id = r.id
-       WHERE ssl.event_id = $1
+       WHERE ssl.ticket_event_id = $1
        ORDER BY r.last_name, r.first_name`,
-      [event_id]
+      [ticket_event_id]
     );
     res.json(result.rows);
   } catch (err) {
@@ -964,7 +964,7 @@ app.get('/student-sale-links/:code', async (req, res) => {
     const result = await pool.query(
       `SELECT ssl.*, e.*, r.first_name as student_first_name, r.last_name as student_last_name
        FROM student_sale_links ssl
-       JOIN events e ON ssl.event_id = e.id
+       JOIN ticket_events e ON ssl.ticket_event_id = e.id
        JOIN roster r ON ssl.roster_id = r.id
        WHERE ssl.unique_code = $1`,
       [code]
@@ -986,7 +986,7 @@ app.get('/student-sale-links/:code', async (req, res) => {
 // Create order (public)
 app.post('/orders', async (req, res) => {
   const {
-    event_id,
+    ticket_event_id,
     performance_id,
     student_sale_link_id,
     buyer_email,
@@ -997,7 +997,7 @@ app.post('/orders', async (req, res) => {
     stripe_payment_intent_id
   } = req.body;
 
-  if (!event_id || !performance_id || !buyer_email || !buyer_name || !items || items.length === 0) {
+  if (!ticket_event_id || !performance_id || !buyer_email || !buyer_name || !items || items.length === 0) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
@@ -1037,10 +1037,10 @@ app.post('/orders', async (req, res) => {
 
     // Create order
     const orderResult = await client.query(
-      `INSERT INTO orders (event_id, performance_id, student_sale_link_id, buyer_email, buyer_name, buyer_phone, subtotal, fees, donation, total, stripe_payment_intent_id, status)
+      `INSERT INTO orders (ticket_event_id, performance_id, student_sale_link_id, buyer_email, buyer_name, buyer_phone, subtotal, fees, donation, total, stripe_payment_intent_id, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
-      [event_id, performance_id, student_sale_link_id, buyer_email, buyer_name, buyer_phone, subtotal, fees, donation, total, stripe_payment_intent_id, 'completed']
+      [ticket_event_id, performance_id, student_sale_link_id, buyer_email, buyer_name, buyer_phone, subtotal, fees, donation, total, stripe_payment_intent_id, 'completed']
     );
 
     const order = orderResult.rows[0];
@@ -1099,17 +1099,17 @@ app.get('/orders/:id', async (req, res) => {
 
 // Get orders for an event
 app.get('/orders', async (req, res) => {
-  const { event_id } = req.query;
-  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+  const { ticket_event_id } = req.query;
+  if (!ticket_event_id) return res.status(400).json({ error: 'ticket_event_id required' });
 
   try {
     const result = await pool.query(
       `SELECT o.*, p.performance_date, p.start_time
        FROM orders o
        JOIN performances p ON o.performance_id = p.id
-       WHERE o.event_id = $1
+       WHERE o.ticket_event_id = $1
        ORDER BY o.created_at DESC`,
-      [event_id]
+      [ticket_event_id]
     );
     res.json(result.rows);
   } catch (err) {
@@ -1122,8 +1122,8 @@ app.get('/orders', async (req, res) => {
 
 // Student sales report
 app.get('/reports/student-sales', async (req, res) => {
-  const { event_id } = req.query;
-  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+  const { ticket_event_id } = req.query;
+  if (!ticket_event_id) return res.status(400).json({ error: 'ticket_event_id required' });
 
   try {
     const result = await pool.query(
@@ -1139,10 +1139,10 @@ app.get('/reports/student-sales', async (req, res) => {
        FROM student_sale_links ssl
        JOIN roster r ON ssl.roster_id = r.id
        LEFT JOIN orders o ON o.student_sale_link_id = ssl.id AND o.status = 'completed'
-       WHERE ssl.event_id = $1
+       WHERE ssl.ticket_event_id = $1
        GROUP BY r.id, r.first_name, r.last_name, r.section, ssl.unique_code
        ORDER BY total_revenue DESC, r.last_name, r.first_name`,
-      [event_id]
+      [ticket_event_id]
     );
     res.json(result.rows);
   } catch (err) {
@@ -1153,8 +1153,8 @@ app.get('/reports/student-sales', async (req, res) => {
 
 // Event summary report
 app.get('/reports/event-summary', async (req, res) => {
-  const { event_id } = req.query;
-  if (!event_id) return res.status(400).json({ error: 'event_id required' });
+  const { ticket_event_id } = req.query;
+  if (!ticket_event_id) return res.status(400).json({ error: 'ticket_event_id required' });
 
   try {
     const result = await pool.query(
@@ -1166,10 +1166,10 @@ app.get('/reports/event-summary', async (req, res) => {
         COALESCE(SUM(o.donation), 0) as donation_revenue,
         COALESCE(SUM((SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.order_id = o.id)), 0) as tickets_sold
        FROM events e
-       LEFT JOIN orders o ON o.event_id = e.id AND o.status = 'completed'
+       LEFT JOIN orders o ON o.ticket_event_id = e.id AND o.status = 'completed'
        WHERE e.id = $1
        GROUP BY e.id`,
-      [event_id]
+      [ticket_event_id]
     );
 
     if (result.rows.length === 0) {

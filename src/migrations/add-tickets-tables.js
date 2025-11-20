@@ -4,20 +4,33 @@ const { Pool } = require('pg');
 const connectionString = 'postgresql://postgres:fWqcmFWhdMovPTRUbQyqxcpxiIkvPDuY@crossover.proxy.rlwy.net:30557/railway';
 
 const pool = new Pool({
-    connectionString: connectionString,
-    ssl: { rejectUnauthorized: false },
+  connectionString: connectionString,
+  ssl: { rejectUnauthorized: false },
 });
 
-async function addTicketsTables() {
-    try {
-        console.log('Connecting to database...');
+async function renameTicketsTables() {
+  try {
+    console.log('Connecting to database...');
 
-        // Events table
-        await pool.query(`
-      CREATE TABLE IF NOT EXISTS events (
+    // Drop old tables if they exist (in reverse dependency order)
+    console.log('Dropping old ticket tables if they exist...');
+    await pool.query('DROP TABLE IF EXISTS order_items CASCADE');
+    await pool.query('DROP TABLE IF EXISTS orders CASCADE');
+    await pool.query('DROP TABLE IF EXISTS student_sale_links CASCADE');
+    await pool.query('DROP TABLE IF EXISTS ticket_types CASCADE');
+    await pool.query('DROP TABLE IF EXISTS performances CASCADE');
+    await pool.query('DROP TABLE IF EXISTS promo_codes CASCADE');
+    await pool.query('DROP TABLE IF EXISTS ticket_events CASCADE');
+
+    // Create new tables with correct names
+
+    // Ticket events table (renamed from events)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ticket_events (
         id SERIAL PRIMARY KEY,
         director_id INTEGER REFERENCES users(id),
         ensemble_id INTEGER REFERENCES ensembles(id),
+        calendar_event_id INTEGER,
         title VARCHAR(255) NOT NULL,
         subtitle VARCHAR(255),
         description TEXT,
@@ -31,13 +44,13 @@ async function addTicketsTables() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-        console.log('✅ Events table created');
+    console.log('✅ Ticket events table created');
 
-        // Performances table
-        await pool.query(`
+    // Performances table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS performances (
         id SERIAL PRIMARY KEY,
-        event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+        ticket_event_id INTEGER REFERENCES ticket_events(id) ON DELETE CASCADE,
         performance_date DATE NOT NULL,
         doors_open_time TIME,
         start_time TIME NOT NULL,
@@ -46,13 +59,13 @@ async function addTicketsTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-        console.log('✅ Performances table created');
+    console.log('✅ Performances table created');
 
-        // Ticket types table
-        await pool.query(`
+    // Ticket types table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS ticket_types (
         id SERIAL PRIMARY KEY,
-        event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+        ticket_event_id INTEGER REFERENCES ticket_events(id) ON DELETE CASCADE,
         name VARCHAR(100) NOT NULL,
         description TEXT,
         price DECIMAL(10, 2) NOT NULL,
@@ -63,25 +76,25 @@ async function addTicketsTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-        console.log('✅ Ticket types table created');
+    console.log('✅ Ticket types table created');
 
-        // Student sale links table
-        await pool.query(`
+    // Student sale links table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS student_sale_links (
         id SERIAL PRIMARY KEY,
-        event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+        ticket_event_id INTEGER REFERENCES ticket_events(id) ON DELETE CASCADE,
         roster_id INTEGER REFERENCES roster(id),
         unique_code VARCHAR(50) UNIQUE NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-        console.log('✅ Student sale links table created');
+    console.log('✅ Student sale links table created');
 
-        // Orders table
-        await pool.query(`
+    // Orders table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS orders (
         id SERIAL PRIMARY KEY,
-        event_id INTEGER REFERENCES events(id),
+        ticket_event_id INTEGER REFERENCES ticket_events(id),
         performance_id INTEGER REFERENCES performances(id),
         student_sale_link_id INTEGER REFERENCES student_sale_links(id),
         buyer_email VARCHAR(255) NOT NULL,
@@ -96,10 +109,10 @@ async function addTicketsTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-        console.log('✅ Orders table created');
+    console.log('✅ Orders table created');
 
-        // Order items table
-        await pool.query(`
+    // Order items table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS order_items (
         id SERIAL PRIMARY KEY,
         order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
@@ -112,13 +125,13 @@ async function addTicketsTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-        console.log('✅ Order items table created');
+    console.log('✅ Order items table created');
 
-        // Promo codes table (for future use)
-        await pool.query(`
+    // Promo codes table (for future use)
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS promo_codes (
         id SERIAL PRIMARY KEY,
-        event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+        ticket_event_id INTEGER REFERENCES ticket_events(id) ON DELETE CASCADE,
         code VARCHAR(50) UNIQUE NOT NULL,
         discount_type VARCHAR(20),
         discount_value DECIMAL(10, 2),
@@ -129,14 +142,14 @@ async function addTicketsTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-        console.log('✅ Promo codes table created');
+    console.log('✅ Promo codes table created');
 
-        console.log('\n🎉 All tickets tables created successfully!');
-    } catch (err) {
-        console.error('❌ Error creating tickets tables:', err);
-    } finally {
-        await pool.end();
-    }
+    console.log('\n🎉 All tickets tables recreated successfully with correct names!');
+  } catch (err) {
+    console.error('❌ Error recreating tickets tables:', err);
+  } finally {
+    await pool.end();
+  }
 }
 
-addTicketsTables();
+renameTicketsTables();
