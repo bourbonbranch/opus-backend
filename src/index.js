@@ -258,6 +258,31 @@ app.put('/rooms/:id', async (req, res) => {
   }
 });
 
+// Get attendance for a room (defaults to today)
+app.get('/attendance', async (req, res) => {
+  const { room_id, date } = req.query;
+  if (!room_id) return res.status(400).json({ error: 'room_id required' });
+
+  try {
+    // Default to today if no date provided
+    const queryDate = date || new Date().toISOString().split('T')[0];
+
+    const result = await pool.query(
+      `SELECT a.*, r.first_name, r.last_name, r.section
+       FROM attendance a
+       JOIN roster r ON a.roster_id = r.id
+       WHERE a.room_id = $1 
+       AND a.created_at::date = $2::date
+       ORDER BY a.created_at DESC`,
+      [room_id, queryDate]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching attendance:', err);
+    res.status(500).json({ error: 'Failed to fetch attendance' });
+  }
+});
+
 
 // Log attendance
 app.post('/attendance', async (req, res) => {
