@@ -78,3 +78,21 @@ CREATE TABLE IF NOT EXISTS calendar_items (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS ensemble_sections (
+  id SERIAL PRIMARY KEY,
+  ensemble_id INTEGER REFERENCES ensembles(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  display_order INTEGER DEFAULT 0,
+  color TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(ensemble_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS ensemble_parts (
+  id SERIAL PRIMARY KEY,
+  section_id INTEGER REFERENCES ensemble_sections(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  display_order INTEGER DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(section_id, name)
+);

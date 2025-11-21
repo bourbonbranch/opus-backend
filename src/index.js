@@ -506,6 +506,199 @@ app.delete('/calendar-items/:id', async (req, res) => {
   }
 });
 
+// --- ENSEMBLE SECTIONS & PARTS ---
+
+// Get sections for an ensemble
+app.get('/ensemble-sections', async (req, res) => {
+  const { ensemble_id } = req.query;
+  if (!ensemble_id) return res.status(400).json({ error: 'ensemble_id required' });
+
+  try {
+    const result = await pool.query(
+      `SELECT * FROM ensemble_sections 
+       WHERE ensemble_id = $1 
+       ORDER BY display_order, name`,
+      [ensemble_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching sections:', err);
+    res.status(500).json({ error: 'Failed to fetch sections' });
+  }
+});
+
+// Create a section
+app.post('/ensemble-sections', async (req, res) => {
+  const { ensemble_id, name, display_order, color } = req.body;
+
+  if (!ensemble_id || !name) {
+    return res.status(400).json({ error: 'ensemble_id and name required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO ensemble_sections (ensemble_id, name, display_order, color)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [ensemble_id, name, display_order || 0, color || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating section:', err);
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Section name already exists for this ensemble' });
+    }
+    res.status(500).json({ error: 'Failed to create section' });
+  }
+});
+
+// Update a section
+app.put('/ensemble-sections/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, display_order, color } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE ensemble_sections
+       SET name = COALESCE($1, name),
+           display_order = COALESCE($2, display_order),
+           color = COALESCE($3, color)
+       WHERE id = $4
+       RETURNING *`,
+      [name, display_order, color, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Section not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating section:', err);
+    res.status(500).json({ error: 'Failed to update section' });
+  }
+});
+
+// Delete a section
+app.delete('/ensemble-sections/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM ensemble_sections WHERE id = $1 RETURNING id', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Section not found' });
+    }
+
+    res.json({ message: 'Section deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting section:', err);
+    res.status(500).json({ error: 'Failed to delete section' });
+  }
+});
+
+// Get parts for a section
+app.get('/ensemble-parts', async (req, res) => {
+  const { section_id, ensemble_id } = req.query;
+
+  try {
+    let query, params;
+
+    if (section_id) {
+      // Get parts for a specific section
+      query = `SELECT * FROM ensemble_parts 
+               WHERE section_id = $1 
+               ORDER BY display_order, name`;
+      params = [section_id];
+    } else if (ensemble_id) {
+      // Get all parts for an ensemble (joined with sections)
+      query = `SELECT p.*, s.name as section_name 
+               FROM ensemble_parts p
+               JOIN ensemble_sections s ON p.section_id = s.id
+               WHERE s.ensemble_id = $1
+               ORDER BY s.display_order, p.display_order, p.name`;
+      params = [ensemble_id];
+    } else {
+      return res.status(400).json({ error: 'section_id or ensemble_id required' });
+    }
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching parts:', err);
+    res.status(500).json({ error: 'Failed to fetch parts' });
+  }
+});
+
+// Create a part
+app.post('/ensemble-parts', async (req, res) => {
+  const { section_id, name, display_order } = req.body;
+
+  if (!section_id || !name) {
+    return res.status(400).json({ error: 'section_id and name required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO ensemble_parts (section_id, name, display_order)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [section_id, name, display_order || 0]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating part:', err);
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Part name already exists for this section' });
+    }
+    res.status(500).json({ error: 'Failed to create part' });
+  }
+});
+
+// Update a part
+app.put('/ensemble-parts/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, display_order } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE ensemble_parts
+       SET name = COALESCE($1, name),
+           display_order = COALESCE($2, display_order)
+       WHERE id = $3
+       RETURNING *`,
+      [name, display_order, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Part not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating part:', err);
+    res.status(500).json({ error: 'Failed to update part' });
+  }
+});
+
+// Delete a part
+app.delete('/ensemble-parts/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM ensemble_parts WHERE id = $1 RETURNING id', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Part not found' });
+    }
+
+    res.json({ message: 'Part deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting part:', err);
+    res.status(500).json({ error: 'Failed to delete part' });
+  }
+});
+
 // --- MESSAGES ---
 
 // TEMP: Migration endpoint to create tables
