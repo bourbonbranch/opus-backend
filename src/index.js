@@ -145,7 +145,7 @@ app.get('/roster', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, ensemble_id, first_name, last_name, email, phone, status, external_id, created_at
+      `SELECT id, ensemble_id, first_name, last_name, email, phone, part, pronouns, status, external_id, created_at
        FROM roster
        WHERE ensemble_id = $1
        ORDER BY last_name, first_name`,
@@ -166,6 +166,8 @@ app.post('/roster', async (req, res) => {
     last_name,
     email,
     phone,
+    part,
+    pronouns,
     status = 'active',
     external_id = null,
   } = req.body || {};
@@ -179,10 +181,10 @@ app.post('/roster', async (req, res) => {
   try {
     const result = await pool.query(
       `INSERT INTO roster
-        (ensemble_id, first_name, last_name, email, phone, status, external_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, ensemble_id, first_name, last_name, email, phone, status, external_id, created_at`,
-      [ensemble_id, first_name, last_name, email || null, phone || null, status, external_id]
+        (ensemble_id, first_name, last_name, email, phone, part, pronouns, status, external_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, ensemble_id, first_name, last_name, email, phone, part, pronouns, status, external_id, created_at`,
+      [ensemble_id, first_name, last_name, email || null, phone || null, part || null, pronouns || null, status, external_id]
     );
 
     res.status(201).json(result.rows[0]);
@@ -206,17 +208,17 @@ app.post('/roster/bulk', async (req, res) => {
 
     const results = [];
     for (const student of students) {
-      const { first_name, last_name, email, phone, section, external_id } = student;
+      const { first_name, last_name, email, phone, section, part, pronouns, external_id } = student;
 
       // Skip if missing required fields
       if (!first_name || !last_name) continue;
 
       const result = await client.query(
         `INSERT INTO roster
-          (ensemble_id, first_name, last_name, email, phone, section, status, external_id)
-         VALUES ($1, $2, $3, $4, $5, $6, 'active', $7)
+          (ensemble_id, first_name, last_name, email, phone, section, part, pronouns, status, external_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9)
          RETURNING *`,
-        [ensemble_id, first_name, last_name, email || null, phone || null, section || null, external_id || null]
+        [ensemble_id, first_name, last_name, email || null, phone || null, section || null, part || null, pronouns || null, external_id || null]
       );
       results.push(result.rows[0]);
     }

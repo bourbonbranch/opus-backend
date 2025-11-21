@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS roster (
   last_name TEXT NOT NULL,
   email TEXT,
   phone TEXT,
+  part TEXT,
+  pronouns TEXT,
   status TEXT DEFAULT 'active',
   external_id TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
