@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS roster (
   last_name TEXT NOT NULL,
   email TEXT,
   phone TEXT,
+  section TEXT,
   part TEXT,
   pronouns TEXT,
   status TEXT DEFAULT 'active',

@@ -145,7 +145,7 @@ app.get('/roster', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, ensemble_id, first_name, last_name, email, phone, part, pronouns, status, external_id, created_at
+      `SELECT id, ensemble_id, first_name, last_name, email, phone, section, part, pronouns, status, external_id, created_at
        FROM roster
        WHERE ensemble_id = $1
        ORDER BY last_name, first_name`,
@@ -158,6 +158,60 @@ app.get('/roster', async (req, res) => {
   }
 });
 
+// Update a roster member
+app.put('/roster/:id', async (req, res) => {
+  const { id } = req.params;
+  const { first_name, last_name, email, phone, section, part, pronouns, status, external_id } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE roster
+       SET first_name = COALESCE($1, first_name),
+           last_name = COALESCE($2, last_name),
+           email = COALESCE($3, email),
+           phone = COALESCE($4, phone),
+           section = COALESCE($5, section),
+           part = COALESCE($6, part),
+           pronouns = COALESCE($7, pronouns),
+           status = COALESCE($8, status),
+           external_id = COALESCE($9, external_id)
+       WHERE id = $10
+       RETURNING *`,
+      [first_name, last_name, email, phone, section, part, pronouns, status, external_id, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Roster member not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating roster member:', err);
+    res.status(500).json({ error: 'Failed to update roster member' });
+  }
+});
+
+// Delete an ensemble
+app.delete('/ensembles/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Note: This relies on ON DELETE CASCADE constraints in the database schema.
+    // If those are not set up, we would need to manually delete related records first.
+    // Assuming standard foreign key constraints with cascading deletes for simplicity.
+    const result = await pool.query('DELETE FROM ensembles WHERE id = $1 RETURNING id', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Ensemble not found' });
+    }
+
+    res.json({ message: 'Ensemble deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting ensemble:', err);
+    res.status(500).json({ error: 'Failed to delete ensemble' });
+  }
+});
+
 // Add a single roster member
 app.post('/roster', async (req, res) => {
   const {
@@ -166,6 +220,7 @@ app.post('/roster', async (req, res) => {
     last_name,
     email,
     phone,
+    section, // Added section
     part,
     pronouns,
     status = 'active',
@@ -181,10 +236,10 @@ app.post('/roster', async (req, res) => {
   try {
     const result = await pool.query(
       `INSERT INTO roster
-        (ensemble_id, first_name, last_name, email, phone, part, pronouns, status, external_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, ensemble_id, first_name, last_name, email, phone, part, pronouns, status, external_id, created_at`,
-      [ensemble_id, first_name, last_name, email || null, phone || null, part || null, pronouns || null, status, external_id]
+        (ensemble_id, first_name, last_name, email, phone, section, part, pronouns, status, external_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, ensemble_id, first_name, last_name, email, phone, section, part, pronouns, status, external_id, created_at`,
+      [ensemble_id, first_name, last_name, email || null, phone || null, section || null, part || null, pronouns || null, status, external_id]
     );
 
     res.status(201).json(result.rows[0]);
