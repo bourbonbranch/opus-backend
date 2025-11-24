@@ -1560,7 +1560,7 @@ app.get('/api/recruiting/prospects', async (req, res) => {
     }
 
     // Count total
-    const countResult = await pool.query(query.replace('SELECT p.*,', 'SELECT COUNT(*)'), params);
+    const countResult = await pool.query(`SELECT COUNT(*) ${query.substring(query.indexOf('FROM'))}`, params);
     const total = parseInt(countResult.rows[0].count);
 
     // Add pagination
