@@ -1493,6 +1493,698 @@ app.get('/reports/event-summary', async (req, res) => {
 });
 
 
+// ========================================
+// RECRUITING MODULE API ENDPOINTS
+// ========================================
+
+// --- PROSPECTS ---
+
+// Get all prospects for a director with filters
+app.get('/api/recruiting/prospects', async (req, res) => {
+  const { director_id, stage, interest_level, voice_part, graduation_year, search, assigned_to, page = 1, limit = 50 } = req.query;
+
+  if (!director_id) {
+    return res.status(400).json({ error: 'director_id is required' });
+  }
+
+  try {
+    let query = `
+      SELECT p.*, 
+             ps.name as stage_name, 
+             ps.color as stage_color,
+             u.first_name as recruiter_first_name,
+             u.last_name as recruiter_last_name
+      FROM prospects p
+      LEFT JOIN pipeline_stages ps ON p.pipeline_stage_id = ps.id
+      LEFT JOIN users u ON p.assigned_recruiter_id = u.id
+      WHERE p.director_id = $1 AND p.status = 'active'
+    `;
+    const params = [director_id];
+    let paramIndex = 2;
+
+    // Add filters
+    if (stage) {
+      query += ` AND p.pipeline_stage_id = $${paramIndex}`;
+      params.push(stage);
+      paramIndex++;
+    }
+
+    if (interest_level) {
+      query += ` AND p.interest_level = $${paramIndex}`;
+      params.push(interest_level);
+      paramIndex++;
+    }
+
+    if (voice_part) {
+      query += ` AND p.voice_part = $${paramIndex}`;
+      params.push(voice_part);
+      paramIndex++;
+    }
+
+    if (graduation_year) {
+      query += ` AND p.graduation_year = $${paramIndex}`;
+      params.push(graduation_year);
+      paramIndex++;
+    }
+
+    if (assigned_to) {
+      query += ` AND p.assigned_recruiter_id = $${paramIndex}`;
+      params.push(assigned_to);
+      paramIndex++;
+    }
+
+    if (search) {
+      query += ` AND (p.first_name ILIKE $${paramIndex} OR p.last_name ILIKE $${paramIndex} OR p.email ILIKE $${paramIndex} OR p.high_school ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    // Count total
+    const countResult = await pool.query(query.replace('SELECT p.*,', 'SELECT COUNT(*)'), params);
+    const total = parseInt(countResult.rows[0].count);
+
+    // Add pagination
+    const offset = (page - 1) * limit;
+    query += ` ORDER BY p.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(limit, offset);
+
+    const result = await pool.query(query, params);
+
+    res.json({
+      prospects: result.rows,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / limit)
+    });
+  } catch (err) {
+    console.error('Error fetching prospects:', err);
+    res.status(500).json({ error: 'Failed to fetch prospects' });
+  }
+});
+
+// Get single prospect with details
+app.get('/api/recruiting/prospects/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const prospectResult = await pool.query(`
+      SELECT p.*, 
+             ps.name as stage_name,
+             u.first_name as recruiter_first_name,
+             u.last_name as recruiter_last_name
+      FROM prospects p
+      LEFT JOIN pipeline_stages ps ON p.pipeline_stage_id = ps.id
+      LEFT JOIN users u ON p.assigned_recruiter_id = u.id
+      WHERE p.id = $1
+    `, [id]);
+
+    if (prospectResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Prospect not found' });
+    }
+
+    // Get communication history
+    const commsResult = await pool.query(`
+      SELECT pc.*, u.first_name, u.last_name
+      FROM prospect_communications pc
+      LEFT JOIN users u ON pc.sent_by = u.id
+      WHERE pc.prospect_id = $1
+      ORDER BY pc.sent_at DESC
+    `, [id]);
+
+    res.json({
+      prospect: prospectResult.rows[0],
+      communications: commsResult.rows
+    });
+  } catch (err) {
+    console.error('Error fetching prospect:', err);
+    res.status(500).json({ error: 'Failed to fetch prospect' });
+  }
+});
+
+// Create new prospect
+app.post('/api/recruiting/prospects', async (req, res) => {
+  const {
+    director_id,
+    first_name,
+    last_name,
+    email,
+    phone,
+    high_school,
+    graduation_year,
+    gpa,
+    voice_part,
+    instrument,
+    years_experience,
+    interest_level = 'warm',
+    source,
+    source_detail,
+    notes,
+    follow_up_date,
+    ensemble_preferences,
+    created_by
+  } = req.body;
+
+  if (!director_id || !first_name || !last_name || !email) {
+    return res.status(400).json({ error: 'director_id, first_name, last_name, and email are required' });
+  }
+
+  try {
+    // Get default "New Lead" stage
+    const stageResult = await pool.query(`
+      SELECT id FROM pipeline_stages 
+      WHERE (director_id = $1 OR director_id IS NULL) 
+      AND name = 'New Lead' 
+      ORDER BY director_id DESC NULLS LAST 
+      LIMIT 1
+    `, [director_id]);
+
+    const stageId = stageResult.rows[0]?.id;
+
+    const result = await pool.query(`
+      INSERT INTO prospects (
+        director_id, first_name, last_name, email, phone,
+        high_school, graduation_year, gpa, voice_part, instrument,
+        years_experience, interest_level, pipeline_stage_id,
+        source, source_detail, notes, follow_up_date,
+        ensemble_preferences, created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+      RETURNING *
+    `, [
+      director_id, first_name, last_name, email, phone,
+      high_school, graduation_year, gpa, voice_part, instrument,
+      years_experience, interest_level, stageId,
+      source, source_detail, notes, follow_up_date,
+      JSON.stringify(ensemble_preferences), created_by
+    ]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating prospect:', err);
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Email already exists for this director' });
+    }
+    res.status(500).json({ error: 'Failed to create prospect' });
+  }
+});
+
+// Update prospect
+app.put('/api/recruiting/prospects/:id', async (req, res) => {
+  const { id } = req.params;
+  const updates = req.body;
+
+  try {
+    const fields = [];
+    const values = [];
+    let paramIndex = 1;
+
+    // Build dynamic update query
+    Object.keys(updates).forEach(key => {
+      if (key !== 'id' && key !== 'director_id' && key !== 'created_at') {
+        fields.push(`${key} = $${paramIndex}`);
+        values.push(updates[key]);
+        paramIndex++;
+      }
+    });
+
+    if (fields.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    fields.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(id);
+
+    const query = `UPDATE prospects SET ${fields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Prospect not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating prospect:', err);
+    res.status(500).json({ error: 'Failed to update prospect' });
+  }
+});
+
+// Delete (archive) prospect
+app.delete('/api/recruiting/prospects/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(`
+      UPDATE prospects SET status = 'archived' WHERE id = $1 RETURNING id
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Prospect not found' });
+    }
+
+    res.json({ message: 'Prospect archived successfully' });
+  } catch (err) {
+    console.error('Error archiving prospect:', err);
+    res.status(500).json({ error: 'Failed to archive prospect' });
+  }
+});
+
+// --- PIPELINE ---
+
+// Get pipeline view
+app.get('/api/recruiting/pipeline', async (req, res) => {
+  const { director_id } = req.query;
+
+  if (!director_id) {
+    return res.status(400).json({ error: 'director_id is required' });
+  }
+
+  try {
+    // Get stages
+    const stagesResult = await pool.query(`
+      SELECT * FROM pipeline_stages 
+      WHERE director_id = $1 OR director_id IS NULL
+      ORDER BY order_index
+    `, [director_id]);
+
+    // Get prospects grouped by stage
+    const stages = await Promise.all(stagesResult.rows.map(async (stage) => {
+      const prospectsResult = await pool.query(`
+        SELECT id, first_name, last_name, email, voice_part, 
+               high_school, graduation_year, interest_level
+        FROM prospects
+        WHERE director_id = $1 AND pipeline_stage_id = $2 AND status = 'active'
+        ORDER BY created_at DESC
+      `, [director_id, stage.id]);
+
+      return {
+        ...stage,
+        prospects: prospectsResult.rows,
+        count: prospectsResult.rows.length
+      };
+    }));
+
+    res.json({ stages });
+  } catch (err) {
+    console.error('Error fetching pipeline:', err);
+    res.status(500).json({ error: 'Failed to fetch pipeline' });
+  }
+});
+
+// Move prospect to different stage
+app.put('/api/recruiting/prospects/:id/stage', async (req, res) => {
+  const { id } = req.params;
+  const { stage_id, notes } = req.body;
+
+  if (!stage_id) {
+    return res.status(400).json({ error: 'stage_id is required' });
+  }
+
+  try {
+    const result = await pool.query(`
+      UPDATE prospects 
+      SET pipeline_stage_id = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+    `, [stage_id, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Prospect not found' });
+    }
+
+    // Log communication if notes provided
+    if (notes) {
+      await pool.query(`
+        INSERT INTO prospect_communications (prospect_id, type, message)
+        VALUES ($1, 'note', $2)
+      `, [id, notes]);
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating stage:', err);
+    res.status(500).json({ error: 'Failed to update stage' });
+  }
+});
+
+// --- QR CODES ---
+
+// Create QR code
+app.post('/api/recruiting/qr-codes', async (req, res) => {
+  const { director_id, name, description, form_config, expires_at, created_by } = req.body;
+
+  if (!director_id || !name) {
+    return res.status(400).json({ error: 'director_id and name are required' });
+  }
+
+  try {
+    // Generate unique code
+    const code = `${name.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString(36)}`;
+
+    const result = await pool.query(`
+      INSERT INTO recruiting_qr_codes (
+        director_id, code, name, description, form_config, expires_at, created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `, [director_id, code, name, description, JSON.stringify(form_config), expires_at, created_by]);
+
+    const qrCode = result.rows[0];
+
+    res.status(201).json({
+      ...qrCode,
+      url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/recruit/${code}`,
+      qr_image_url: `${process.env.API_URL || 'http://localhost:8080'}/api/qr/${code}.png`
+    });
+  } catch (err) {
+    console.error('Error creating QR code:', err);
+    res.status(500).json({ error: 'Failed to create QR code' });
+  }
+});
+
+// Get QR code form (public)
+app.get('/api/recruiting/form/:code', async (req, res) => {
+  const { code } = req.params;
+
+  try {
+    const result = await pool.query(`
+      SELECT qr.*, u.first_name as director_first_name, u.last_name as director_last_name
+      FROM recruiting_qr_codes qr
+      JOIN users u ON qr.director_id = u.id
+      WHERE qr.code = $1 AND qr.is_active = true
+      AND (qr.expires_at IS NULL OR qr.expires_at > CURRENT_TIMESTAMP)
+    `, [code]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'QR code not found or expired' });
+    }
+
+    // Increment scan count
+    await pool.query(`
+      UPDATE recruiting_qr_codes SET scan_count = scan_count + 1 WHERE code = $1
+    `, [code]);
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error fetching QR form:', err);
+    res.status(500).json({ error: 'Failed to fetch form' });
+  }
+});
+
+// Submit QR code form (public)
+app.post('/api/recruiting/submit/:code', async (req, res) => {
+  const { code } = req.params;
+  const { first_name, last_name, email, phone, high_school, graduation_year, voice_part, custom_responses } = req.body;
+
+  if (!first_name || !last_name || !email) {
+    return res.status(400).json({ error: 'first_name, last_name, and email are required' });
+  }
+
+  try {
+    // Get QR code details
+    const qrResult = await pool.query(`
+      SELECT * FROM recruiting_qr_codes WHERE code = $1 AND is_active = true
+    `, [code]);
+
+    if (qrResult.rows.length === 0) {
+      return res.status(404).json({ error: 'QR code not found or inactive' });
+    }
+
+    const qrCode = qrResult.rows[0];
+
+    // Get default stage
+    const stageResult = await pool.query(`
+      SELECT id FROM pipeline_stages 
+      WHERE (director_id = $1 OR director_id IS NULL) 
+      AND name = 'New Lead' 
+      ORDER BY director_id DESC NULLS LAST 
+      LIMIT 1
+    `, [qrCode.director_id]);
+
+    // Create prospect
+    const prospectResult = await pool.query(`
+      INSERT INTO prospects (
+        director_id, first_name, last_name, email, phone,
+        high_school, graduation_year, voice_part,
+        source, source_detail, pipeline_stage_id, notes
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *
+    `, [
+      qrCode.director_id, first_name, last_name, email, phone,
+      high_school, graduation_year, voice_part,
+      'qr_code', qrCode.name, stageResult.rows[0]?.id,
+      custom_responses ? JSON.stringify(custom_responses) : null
+    ]);
+
+    // Increment submission count
+    await pool.query(`
+      UPDATE recruiting_qr_codes SET submission_count = submission_count + 1 WHERE code = $1
+    `, [code]);
+
+    res.status(201).json({
+      message: 'Thank you for your interest!',
+      prospect_id: prospectResult.rows[0].id
+    });
+  } catch (err) {
+    console.error('Error submitting form:', err);
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'This email has already been submitted' });
+    }
+    res.status(500).json({ error: 'Failed to submit form' });
+  }
+});
+
+// --- EMAIL TEMPLATES ---
+
+// Get templates
+app.get('/api/recruiting/templates', async (req, res) => {
+  const { director_id, category } = req.query;
+
+  if (!director_id) {
+    return res.status(400).json({ error: 'director_id is required' });
+  }
+
+  try {
+    let query = `SELECT * FROM email_templates WHERE director_id = $1 AND is_active = true`;
+    const params = [director_id];
+
+    if (category) {
+      query += ` AND category = $2`;
+      params.push(category);
+    }
+
+    query += ` ORDER BY category, name`;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching templates:', err);
+    res.status(500).json({ error: 'Failed to fetch templates' });
+  }
+});
+
+// Create template
+app.post('/api/recruiting/templates', async (req, res) => {
+  const { director_id, name, subject, body, category, created_by } = req.body;
+
+  if (!director_id || !name || !subject || !body) {
+    return res.status(400).json({ error: 'director_id, name, subject, and body are required' });
+  }
+
+  try {
+    const result = await pool.query(`
+      INSERT INTO email_templates (director_id, name, subject, body, category, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [director_id, name, subject, body, category, created_by]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating template:', err);
+    res.status(500).json({ error: 'Failed to create template' });
+  }
+});
+
+// Send email to prospects
+app.post('/api/recruiting/send-email', async (req, res) => {
+  const { prospect_ids, template_id, variables, sent_by } = req.body;
+
+  if (!prospect_ids || !Array.isArray(prospect_ids) || prospect_ids.length === 0) {
+    return res.status(400).json({ error: 'prospect_ids array is required' });
+  }
+
+  try {
+    // Get template if provided
+    let template = null;
+    if (template_id) {
+      const templateResult = await pool.query(`SELECT * FROM email_templates WHERE id = $1`, [template_id]);
+      template = templateResult.rows[0];
+    }
+
+    // Log communications
+    const communications = [];
+    for (const prospectId of prospect_ids) {
+      const result = await pool.query(`
+        INSERT INTO prospect_communications (
+          prospect_id, type, subject, message, template_id, sent_by
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `, [
+        prospectId,
+        'email',
+        template?.subject || 'Email sent',
+        template?.body || '',
+        template_id,
+        sent_by
+      ]);
+      communications.push(result.rows[0]);
+    }
+
+    res.status(201).json({
+      message: `Email sent to ${prospect_ids.length} prospect(s)`,
+      communications
+    });
+  } catch (err) {
+    console.error('Error sending email:', err);
+    res.status(500).json({ error: 'Failed to send email' });
+  }
+});
+
+// --- ANALYTICS ---
+
+// Get recruiting analytics
+app.get('/api/recruiting/analytics', async (req, res) => {
+  const { director_id, start_date, end_date } = req.query;
+
+  if (!director_id) {
+    return res.status(400).json({ error: 'director_id is required' });
+  }
+
+  try {
+    // Prospects by voice part
+    const voicePartResult = await pool.query(`
+      SELECT voice_part, COUNT(*) as count
+      FROM prospects
+      WHERE director_id = $1 AND status = 'active'
+      GROUP BY voice_part
+      ORDER BY count DESC
+    `, [director_id]);
+
+    // Top feeder schools
+    const schoolsResult = await pool.query(`
+      SELECT high_school, COUNT(*) as count
+      FROM prospects
+      WHERE director_id = $1 AND status = 'active' AND high_school IS NOT NULL
+      GROUP BY high_school
+      ORDER BY count DESC
+      LIMIT 10
+    `, [director_id]);
+
+    // Conversion funnel
+    const funnelResult = await pool.query(`
+      SELECT ps.name, COUNT(p.id) as count
+      FROM pipeline_stages ps
+      LEFT JOIN prospects p ON ps.id = p.pipeline_stage_id AND p.director_id = $1 AND p.status = 'active'
+      WHERE ps.director_id = $1 OR ps.director_id IS NULL
+      GROUP BY ps.name, ps.order_index
+      ORDER BY ps.order_index
+    `, [director_id]);
+
+    // Interest level breakdown
+    const interestResult = await pool.query(`
+      SELECT interest_level, COUNT(*) as count
+      FROM prospects
+      WHERE director_id = $1 AND status = 'active'
+      GROUP BY interest_level
+    `, [director_id]);
+
+    res.json({
+      prospects_by_voice_part: voicePartResult.rows.reduce((acc, row) => {
+        acc[row.voice_part || 'Unknown'] = parseInt(row.count);
+        return acc;
+      }, {}),
+      top_feeder_schools: schoolsResult.rows.map(row => ({
+        school: row.high_school,
+        count: parseInt(row.count)
+      })),
+      conversion_funnel: funnelResult.rows.reduce((acc, row) => {
+        acc[row.name] = parseInt(row.count);
+        return acc;
+      }, {}),
+      interest_level_breakdown: interestResult.rows.reduce((acc, row) => {
+        acc[row.interest_level] = parseInt(row.count);
+        return acc;
+      }, {})
+    });
+  } catch (err) {
+    console.error('Error fetching analytics:', err);
+    res.status(500).json({ error: 'Failed to fetch analytics' });
+  }
+});
+
+// --- CONVERSION ---
+
+// Convert prospect to student
+app.post('/api/recruiting/prospects/:id/convert', async (req, res) => {
+  const { id } = req.params;
+  const { ensemble_id, voice_part, section } = req.body;
+
+  if (!ensemble_id) {
+    return res.status(400).json({ error: 'ensemble_id is required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Get prospect
+    const prospectResult = await client.query(`SELECT * FROM prospects WHERE id = $1`, [id]);
+    if (prospectResult.rows.length === 0) {
+      throw new Error('Prospect not found');
+    }
+    const prospect = prospectResult.rows[0];
+
+    // Create roster entry
+    const rosterResult = await client.query(`
+      INSERT INTO roster (
+        ensemble_id, first_name, last_name, email, phone, section, part, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')
+      RETURNING *
+    `, [
+      ensemble_id,
+      prospect.first_name,
+      prospect.last_name,
+      prospect.email,
+      prospect.phone,
+      section || voice_part,
+      voice_part
+    ]);
+
+    const student = rosterResult.rows[0];
+
+    // Update prospect
+    await client.query(`
+      UPDATE prospects 
+      SET status = 'converted', 
+          converted_to_student_id = $1, 
+          converted_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+    `, [student.id, id]);
+
+    await client.query('COMMIT');
+
+    res.status(201).json({
+      message: 'Prospect converted to student successfully',
+      student_id: student.id,
+      roster_id: student.id
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error converting prospect:', err);
+    res.status(500).json({ error: 'Failed to convert prospect' });
+  } finally {
+    client.release();
+  }
+});
+
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
