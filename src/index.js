@@ -1766,6 +1766,14 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
   console.log('Converted director_id to:', director_id, 'Type:', typeof director_id);
 
   try {
+    // VERIFY DIRECTOR EXISTS
+    const userCheck = await pool.query('SELECT id, email FROM users WHERE id = $1', [director_id]);
+    if (userCheck.rows.length === 0) {
+      console.error(`❌ Director ID ${director_id} NOT FOUND in users table!`);
+      return res.status(400).json({ error: `Director ID ${director_id} not found in database` });
+    }
+    console.log(`✅ Verified Director ID ${director_id} exists: ${userCheck.rows[0].email}`);
+
     // Get default "New Lead" stage
     const stageResult = await pool.query(`
       SELECT id FROM pipeline_stages 
