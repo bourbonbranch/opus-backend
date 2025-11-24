@@ -1749,7 +1749,7 @@ app.delete('/api/recruiting/prospects/:id', async (req, res) => {
 
 // Bulk import prospects from CSV
 app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
-  const { director_id, prospects } = req.body;
+  let { director_id, prospects } = req.body;
 
   console.log('=== BULK IMPORT REQUEST ===');
   console.log('Director ID:', director_id, 'Type:', typeof director_id);
@@ -1760,6 +1760,10 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
   if (!director_id || !prospects || !Array.isArray(prospects)) {
     return res.status(400).json({ error: 'director_id and prospects array are required' });
   }
+
+  // CRITICAL FIX: Convert director_id to integer
+  director_id = parseInt(director_id);
+  console.log('Converted director_id to:', director_id, 'Type:', typeof director_id);
 
   try {
     // Get default "New Lead" stage
