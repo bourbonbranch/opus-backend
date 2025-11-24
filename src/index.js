@@ -1755,12 +1755,9 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
     return res.status(400).json({ error: 'director_id and prospects array are required' });
   }
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
     // Get default "New Lead" stage
-    const stageResult = await client.query(`
+    const stageResult = await pool.query(`
       SELECT id FROM pipeline_stages 
       WHERE (director_id = $1 OR director_id IS NULL) 
       AND name = 'New Lead' 
@@ -1770,12 +1767,17 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
 
     const stageId = stageResult.rows[0]?.id;
 
+    if (!stageId) {
+      return res.status(500).json({ error: 'No pipeline stage found. Please run migrations.' });
+    }
+
     const results = {
       imported: [],
       skipped: [],
       errors: []
     };
 
+    // Process each prospect independently (no transaction)
     for (const prospect of prospects) {
       const { first_name, last_name, email, phone, high_school, graduation_year, gpa, voice_part, instrument, years_experience, interest_level, source, notes } = prospect;
 
@@ -1786,7 +1788,7 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
       }
 
       try {
-        const result = await client.query(`
+        const result = await pool.query(`
           INSERT INTO prospects (
             director_id, first_name, last_name, email, phone,
             high_school, graduation_year, gpa, voice_part, instrument,
@@ -1795,13 +1797,26 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
           RETURNING *
         `, [
-          director_id, first_name, last_name, email, phone || null,
-          high_school || null, graduation_year || null, gpa || null, voice_part || null, instrument || null,
-          years_experience || null, interest_level || 'warm', stageId,
-          source || 'csv_import', notes || null, director_id
+          director_id,
+          first_name.substring(0, 100), // Limit to 100 chars
+          last_name.substring(0, 100),
+          email.substring(0, 255),
+          phone ? phone.substring(0, 20) : null,
+          high_school ? high_school.substring(0, 255) : null,
+          graduation_year ? parseInt(graduation_year) : null,
+          gpa ? parseFloat(gpa) : null,
+          voice_part ? voice_part.substring(0, 50) : null,
+          instrument ? instrument.substring(0, 100) : null,
+          years_experience ? parseInt(years_experience) : null,
+          interest_level || 'warm',
+          stageId,
+          source ? source.substring(0, 100) : 'csv_import',
+          notes || null,
+          director_id
         ]);
         results.imported.push(result.rows[0]);
       } catch (err) {
+        console.error(`Error importing prospect ${first_name} ${last_name}:`, err.message);
         if (err.code === '23505') {
           results.skipped.push({ prospect, reason: 'Email already exists' });
         } else {
@@ -1809,8 +1824,6 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
         }
       }
     }
-
-    await client.query('COMMIT');
 
     res.status(201).json({
       message: `Imported ${results.imported.length} prospects`,
@@ -1820,11 +1833,8 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
       details: results
     });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('Error bulk importing prospects:', err);
-    res.status(500).json({ error: 'Failed to import prospects' });
-  } finally {
-    client.release();
+    res.status(500).json({ error: 'Failed to import prospects: ' + err.message });
   }
 });
 
