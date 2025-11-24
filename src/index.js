@@ -1751,6 +1751,12 @@ app.delete('/api/recruiting/prospects/:id', async (req, res) => {
 app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
   const { director_id, prospects } = req.body;
 
+  console.log('=== BULK IMPORT REQUEST ===');
+  console.log('Director ID:', director_id, 'Type:', typeof director_id);
+  console.log('Prospects count:', prospects?.length);
+  console.log('First prospect:', JSON.stringify(prospects?.[0], null, 2));
+  console.log('========================');
+
   if (!director_id || !prospects || !Array.isArray(prospects)) {
     return res.status(400).json({ error: 'director_id and prospects array are required' });
   }
