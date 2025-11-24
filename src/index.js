@@ -1747,6 +1747,87 @@ app.delete('/api/recruiting/prospects/:id', async (req, res) => {
   }
 });
 
+// Bulk import prospects from CSV
+app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
+  const { director_id, prospects } = req.body;
+
+  if (!director_id || !prospects || !Array.isArray(prospects)) {
+    return res.status(400).json({ error: 'director_id and prospects array are required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Get default "New Lead" stage
+    const stageResult = await client.query(`
+      SELECT id FROM pipeline_stages 
+      WHERE (director_id = $1 OR director_id IS NULL) 
+      AND name = 'New Lead' 
+      ORDER BY director_id DESC NULLS LAST 
+      LIMIT 1
+    `, [director_id]);
+
+    const stageId = stageResult.rows[0]?.id;
+
+    const results = {
+      imported: [],
+      skipped: [],
+      errors: []
+    };
+
+    for (const prospect of prospects) {
+      const { first_name, last_name, email, phone, high_school, graduation_year, gpa, voice_part, instrument, years_experience, interest_level, source, notes } = prospect;
+
+      // Skip if missing required fields
+      if (!first_name || !last_name || !email) {
+        results.skipped.push({ prospect, reason: 'Missing required fields (first_name, last_name, email)' });
+        continue;
+      }
+
+      try {
+        const result = await client.query(`
+          INSERT INTO prospects (
+            director_id, first_name, last_name, email, phone,
+            high_school, graduation_year, gpa, voice_part, instrument,
+            years_experience, interest_level, pipeline_stage_id,
+            source, notes, created_by
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          RETURNING *
+        `, [
+          director_id, first_name, last_name, email, phone || null,
+          high_school || null, graduation_year || null, gpa || null, voice_part || null, instrument || null,
+          years_experience || null, interest_level || 'warm', stageId,
+          source || 'csv_import', notes || null, director_id
+        ]);
+        results.imported.push(result.rows[0]);
+      } catch (err) {
+        if (err.code === '23505') {
+          results.skipped.push({ prospect, reason: 'Email already exists' });
+        } else {
+          results.errors.push({ prospect, error: err.message });
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+
+    res.status(201).json({
+      message: `Imported ${results.imported.length} prospects`,
+      imported: results.imported.length,
+      skipped: results.skipped.length,
+      errors: results.errors.length,
+      details: results
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error bulk importing prospects:', err);
+    res.status(500).json({ error: 'Failed to import prospects' });
+  } finally {
+    client.release();
+  }
+});
+
 // --- PIPELINE ---
 
 // Get pipeline view
