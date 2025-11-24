@@ -1804,7 +1804,7 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
             high_school, graduation_year, gpa, voice_part, instrument,
             years_experience, interest_level, pipeline_stage_id,
             source, notes, created_by
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          ) VALUES ($1::integer, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::integer)
           RETURNING *
         `, [
           director_id,
@@ -1825,8 +1825,9 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
           director_id
         ]);
         results.imported.push(result.rows[0]);
+        console.log(`✅ Imported: ${first_name} ${last_name}`);
       } catch (err) {
-        console.error(`Error importing prospect ${first_name} ${last_name}:`, err.message);
+        console.error(`❌ Error importing prospect ${first_name} ${last_name}:`, err.message);
         if (err.code === '23505') {
           results.skipped.push({ prospect, reason: 'Email already exists' });
         } else {
