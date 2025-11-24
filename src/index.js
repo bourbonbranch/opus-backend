@@ -1804,11 +1804,16 @@ app.post('/api/recruiting/prospects/bulk-import', async (req, res) => {
             high_school, graduation_year, gpa, voice_part, instrument,
             years_experience, interest_level, pipeline_stage_id,
             source, notes, created_by
-          ) VALUES ($1::integer, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::integer)
+          ) VALUES (
+            $1::integer, $2::varchar(100), $3::varchar(100), $4::varchar(255), $5::varchar(20),
+            $6::varchar(255), $7::integer, $8::numeric, $9::varchar(50), $10::varchar(100),
+            $11::integer, $12::varchar(20), $13::integer,
+            $14::varchar(100), $15::text, $16::integer
+          )
           RETURNING *
         `, [
           director_id,
-          first_name.substring(0, 100), // Limit to 100 chars
+          first_name.substring(0, 100),
           last_name.substring(0, 100),
           email.substring(0, 255),
           phone ? phone.substring(0, 20) : null,
