@@ -133,6 +133,447 @@ app.post('/ensembles', async (req, res) => {
   }
 });
 
+// --- ENHANCED ENSEMBLE ROUTES ---
+
+// Get single ensemble
+app.get('/api/ensembles/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query('SELECT * FROM ensembles WHERE id = $1', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Ensemble not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error fetching ensemble:', err);
+    res.status(500).json({ error: 'Failed to fetch ensemble' });
+  }
+});
+
+// Update ensemble
+app.patch('/api/ensembles/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description, short_code, type, color_hex, organization_name, level, size } = req.body;
+
+    const result = await pool.query(`
+      UPDATE ensembles 
+      SET name = COALESCE($1, name),
+          description = COALESCE($2, description),
+          short_code = COALESCE($3, short_code),
+          type = COALESCE($4, type),
+          color_hex = COALESCE($5, color_hex),
+          organization_name = COALESCE($6, organization_name),
+          level = COALESCE($7, level),
+          size = COALESCE($8, size),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $9
+      RETURNING *
+    `, [name, description, short_code, type, color_hex, organization_name, level, size, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Ensemble not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating ensemble:', err);
+    res.status(500).json({ error: 'Failed to update ensemble' });
+  }
+});
+
+// Delete ensemble
+app.delete('/api/ensembles/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query('DELETE FROM ensembles WHERE id = $1 RETURNING id', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Ensemble not found' });
+    }
+
+    res.json({ message: 'Ensemble deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting ensemble:', err);
+    res.status(500).json({ error: 'Failed to delete ensemble' });
+  }
+});
+
+// Get ensemble overview (stats + recent activity)
+app.get('/api/ensembles/:id/overview', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get ensemble details
+    const ensembleResult = await pool.query('SELECT * FROM ensembles WHERE id = $1', [id]);
+    if (ensembleResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Ensemble not found' });
+    }
+    const ensemble = ensembleResult.rows[0];
+
+    // Get member count
+    const memberCount = await pool.query(
+      'SELECT COUNT(*) as count FROM roster WHERE ensemble_id = $1 AND status = $2',
+      [id, 'active']
+    );
+
+    // Get upcoming events (next 3)
+    const upcomingEvents = await pool.query(`
+      SELECT id, title as name, type, date, description
+      FROM calendar_items
+      WHERE ensemble_id = $1 AND date >= CURRENT_DATE
+      ORDER BY date ASC
+      LIMIT 3
+    `, [id]);
+
+    // Get recent messages (if messages table exists)
+    let recentMessages = [];
+    try {
+      const messagesResult = await pool.query(`
+        SELECT id, subject, sent_at, audience
+        FROM messages
+        WHERE target_type = 'ensemble' AND target_id = $1
+        ORDER BY sent_at DESC
+        LIMIT 3
+      `, [id]);
+      recentMessages = messagesResult.rows;
+    } catch (err) {
+      // Messages table might not exist yet
+      console.log('Messages table not available');
+    }
+
+    // Get upcoming assignments
+    const upcomingAssignments = await pool.query(`
+      SELECT id, title, type, due_at, status
+      FROM ensemble_assignments
+      WHERE ensemble_id = $1 AND status = 'active' AND due_at >= CURRENT_DATE
+      ORDER BY due_at ASC
+      LIMIT 3
+    `, [id]);
+
+    res.json({
+      ensemble,
+      stats: {
+        member_count: parseInt(memberCount.rows[0].count),
+        upcoming_event: upcomingEvents.rows[0] || null
+      },
+      upcoming_events: upcomingEvents.rows,
+      recent_messages: recentMessages,
+      upcoming_assignments: upcomingAssignments.rows
+    });
+  } catch (err) {
+    console.error('Error fetching ensemble overview:', err);
+    res.status(500).json({ error: 'Failed to fetch ensemble overview' });
+  }
+});
+
+// Get ensemble members (roster)
+app.get('/api/ensembles/:id/members', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { section, part } = req.query;
+
+    let query = 'SELECT * FROM roster WHERE ensemble_id = $1';
+    const params = [id];
+
+    if (section) {
+      query += ' AND section = $2';
+      params.push(section);
+    }
+    if (part) {
+      const paramIndex = params.length + 1;
+      query += ` AND part = $${paramIndex}`;
+      params.push(part);
+    }
+
+    query += ' ORDER BY section, part, last_name, first_name';
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching ensemble members:', err);
+    res.status(500).json({ error: 'Failed to fetch members' });
+  }
+});
+
+// Add member to ensemble
+app.post('/api/ensembles/:id/members', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { first_name, last_name, email, phone, section, part, pronouns } = req.body;
+
+    if (!first_name || !last_name) {
+      return res.status(400).json({ error: 'first_name and last_name are required' });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO roster (ensemble_id, first_name, last_name, email, phone, section, part, pronouns, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active')
+      RETURNING *
+    `, [id, first_name, last_name, email, phone, section, part, pronouns]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error adding member:', err);
+    res.status(500).json({ error: 'Failed to add member' });
+  }
+});
+
+// Update ensemble member
+app.patch('/api/ensembles/:id/members/:memberId', async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    const { section, part, status, pronouns, email, phone } = req.body;
+
+    const result = await pool.query(`
+      UPDATE roster
+      SET section = COALESCE($1, section),
+          part = COALESCE($2, part),
+          status = COALESCE($3, status),
+          pronouns = COALESCE($4, pronouns),
+          email = COALESCE($5, email),
+          phone = COALESCE($6, phone)
+      WHERE id = $7
+      RETURNING *
+    `, [section, part, status, pronouns, email, phone, memberId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating member:', err);
+    res.status(500).json({ error: 'Failed to update member' });
+  }
+});
+
+// Remove member from ensemble
+app.delete('/api/ensembles/:id/members/:memberId', async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    const result = await pool.query('DELETE FROM roster WHERE id = $1 RETURNING id', [memberId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    res.json({ message: 'Member removed successfully' });
+  } catch (err) {
+    console.error('Error removing member:', err);
+    res.status(500).json({ error: 'Failed to remove member' });
+  }
+});
+
+// Get ensemble attendance for a specific date
+app.get('/api/ensembles/:id/attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date } = req.query;
+
+    if (!date) {
+      return res.status(400).json({ error: 'date parameter is required (YYYY-MM-DD)' });
+    }
+
+    // Get all members
+    const members = await pool.query(
+      'SELECT id, first_name, last_name, section, part FROM roster WHERE ensemble_id = $1 AND status = $2 ORDER BY section, part, last_name',
+      [id, 'active']
+    );
+
+    // Get attendance records for this date
+    const attendance = await pool.query(`
+      SELECT roster_id, status
+      FROM attendance
+      WHERE roster_id = ANY($1) AND DATE(check_in_time) = $2
+    `, [members.rows.map(m => m.id), date]);
+
+    const attendanceMap = {};
+    attendance.rows.forEach(a => {
+      attendanceMap[a.roster_id] = a.status;
+    });
+
+    const records = members.rows.map(member => ({
+      ...member,
+      status: attendanceMap[member.id] || 'absent'
+    }));
+
+    res.json({ date, records });
+  } catch (err) {
+    console.error('Error fetching attendance:', err);
+    res.status(500).json({ error: 'Failed to fetch attendance' });
+  }
+});
+
+// Save ensemble attendance
+app.post('/api/ensembles/:id/attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date, records } = req.body;
+
+    if (!date || !records || !Array.isArray(records)) {
+      return res.status(400).json({ error: 'date and records array are required' });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Delete existing attendance for this date
+      await client.query(`
+        DELETE FROM attendance
+        WHERE roster_id IN (SELECT id FROM roster WHERE ensemble_id = $1)
+        AND DATE(check_in_time) = $2
+      `, [id, date]);
+
+      // Insert new attendance records
+      for (const record of records) {
+        if (record.status && record.status !== 'absent') {
+          await client.query(`
+            INSERT INTO attendance (roster_id, status, check_in_time)
+            VALUES ($1, $2, $3::date)
+          `, [record.student_id, record.status, date]);
+        }
+      }
+
+      await client.query('COMMIT');
+      res.json({ message: 'Attendance saved successfully' });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Error saving attendance:', err);
+    res.status(500).json({ error: 'Failed to save attendance' });
+  }
+});
+
+// Get ensemble assignments
+app.get('/api/ensembles/:id/assignments', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      SELECT * FROM ensemble_assignments
+      WHERE ensemble_id = $1
+      ORDER BY due_at DESC, created_at DESC
+    `, [id]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching assignments:', err);
+    res.status(500).json({ error: 'Failed to fetch assignments' });
+  }
+});
+
+// Create ensemble assignment
+app.post('/api/ensembles/:id/assignments', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, type, due_at, created_by } = req.body;
+
+    if (!title) {
+      return res.status(400).json({ error: 'title is required' });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO ensemble_assignments (ensemble_id, title, description, type, due_at, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [id, title, description, type, due_at, created_by]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating assignment:', err);
+    res.status(500).json({ error: 'Failed to create assignment' });
+  }
+});
+
+// Get ensemble files
+app.get('/api/ensembles/:id/files', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      SELECT * FROM ensemble_files
+      WHERE ensemble_id = $1
+      ORDER BY created_at DESC
+    `, [id]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching files:', err);
+    res.status(500).json({ error: 'Failed to fetch files' });
+  }
+});
+
+// Upload ensemble file (stub - actual file upload would need multer or similar)
+app.post('/api/ensembles/:id/files', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, file_type, storage_url, file_size, uploaded_by } = req.body;
+
+    if (!title) {
+      return res.status(400).json({ error: 'title is required' });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO ensemble_files (ensemble_id, title, file_type, storage_url, file_size, uploaded_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [id, title, file_type, storage_url, file_size, uploaded_by]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error uploading file:', err);
+    res.status(500).json({ error: 'Failed to upload file' });
+  }
+});
+
+// Get ensemble messages (filtered view)
+app.get('/api/ensembles/:id/messages', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Try to get messages, but handle if table doesn't exist
+    try {
+      const result = await pool.query(`
+        SELECT * FROM messages
+        WHERE target_type = 'ensemble' AND target_id = $1
+        ORDER BY sent_at DESC
+        LIMIT 50
+      `, [id]);
+
+      res.json(result.rows);
+    } catch (err) {
+      // Messages table might not exist yet
+      res.json([]);
+    }
+  } catch (err) {
+    console.error('Error fetching messages:', err);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// Get ensemble events (filtered view)
+app.get('/api/ensembles/:id/events', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      SELECT * FROM calendar_items
+      WHERE ensemble_id = $1
+      ORDER BY date DESC
+    `, [id]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching events:', err);
+    res.status(500).json({ error: 'Failed to fetch events' });
+  }
+});
+
 // --- ROSTER ROUTES ---
 
 // Get roster for an ensemble
