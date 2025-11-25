@@ -2300,6 +2300,423 @@ app.post('/api/recruiting/prospects/:id/convert', async (req, res) => {
 });
 
 
+
+// --- FUNDRAISING MODULE ---
+
+// Helper to generate unique token
+function generateToken(name) {
+  const cleanName = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const random = Math.random().toString(36).substring(2, 5);
+  return `${cleanName}-${random}`;
+}
+
+// Create a campaign
+app.post('/api/campaigns', async (req, res) => {
+  const { director_id, ensemble_id, name, description, goal_amount_cents, per_student_goal_cents, starts_at, ends_at } = req.body;
+
+  if (!director_id || !name) {
+    return res.status(400).json({ error: 'director_id and name are required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Create Campaign
+    // Generate slug from name
+    let slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    // Ensure uniqueness (simple check)
+    const slugCheck = await client.query('SELECT id FROM campaigns WHERE slug = $1', [slug]);
+    if (slugCheck.rows.length > 0) {
+      slug = `${slug}-${Date.now()}`;
+    }
+
+    const campaignResult = await client.query(`
+      INSERT INTO campaigns (
+        director_id, ensemble_id, name, slug, description, 
+        goal_amount_cents, per_student_goal_cents, starts_at, ends_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *
+    `, [
+      director_id, ensemble_id || null, name, slug, description || null,
+      goal_amount_cents || null, per_student_goal_cents || null, starts_at || null, ends_at || null
+    ]);
+    const campaign = campaignResult.rows[0];
+
+    // 2. Add Participants from Roster
+    let participantsCreated = 0;
+    if (ensemble_id) {
+      const rosterResult = await client.query(`
+        SELECT id, first_name, last_name FROM roster WHERE ensemble_id = $1 AND status = 'active'
+      `, [ensemble_id]);
+
+      for (const student of rosterResult.rows) {
+        const token = generateToken(student.first_name);
+
+        await client.query(`
+          INSERT INTO campaign_participants (
+            campaign_id, student_id, token, personal_goal_cents
+          ) VALUES ($1, $2, $3, $4)
+          ON CONFLICT (campaign_id, student_id) DO NOTHING
+        `, [
+          campaign.id,
+          student.id,
+          token,
+          per_student_goal_cents || 0
+        ]);
+        participantsCreated++;
+      }
+    }
+
+    await client.query('COMMIT');
+
+    res.status(201).json({
+      ...campaign,
+      participants_count: participantsCreated
+    });
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error creating campaign:', err);
+    res.status(500).json({ error: 'Failed to create campaign' });
+  } finally {
+    client.release();
+  }
+});
+
+// Get campaigns for director
+app.get('/api/campaigns', async (req, res) => {
+  const { director_id } = req.query;
+  if (!director_id) return res.status(400).json({ error: 'director_id required' });
+
+  try {
+    const result = await pool.query(`
+      SELECT c.*, 
+        (SELECT COUNT(*) FROM campaign_participants cp WHERE cp.campaign_id = c.id) as participant_count,
+        (SELECT COALESCE(SUM(total_raised_cents), 0) FROM campaign_participants cp WHERE cp.campaign_id = c.id) as total_raised
+      FROM campaigns c
+      WHERE c.director_id = $1
+      ORDER BY c.created_at DESC
+    `, [director_id]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching campaigns:', err);
+    res.status(500).json({ error: 'Failed to fetch campaigns' });
+  }
+});
+
+// Get single campaign details
+app.get('/api/campaigns/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const campaignResult = await pool.query(`
+      SELECT c.*, e.name as ensemble_name
+      FROM campaigns c
+      LEFT JOIN ensembles e ON c.ensemble_id = e.id
+      WHERE c.id = $1
+    `, [id]);
+
+    if (campaignResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    const campaign = campaignResult.rows[0];
+
+    // Get stats
+    const statsResult = await pool.query(`
+      SELECT 
+        COUNT(*) as participant_count,
+        COALESCE(SUM(total_raised_cents), 0) as total_raised,
+        COUNT(DISTINCT d.id) as donor_count
+      FROM campaign_participants cp
+      LEFT JOIN donations d ON d.participant_id = cp.id
+      WHERE cp.campaign_id = $1
+    `, [id]);
+
+    res.json({
+      ...campaign,
+      stats: statsResult.rows[0]
+    });
+  } catch (err) {
+    console.error('Error fetching campaign details:', err);
+    res.status(500).json({ error: 'Failed to fetch campaign details' });
+  }
+});
+
+// Get campaign participants
+app.get('/api/campaigns/:id/participants', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(`
+      SELECT cp.*, r.first_name, r.last_name, r.section, r.part
+      FROM campaign_participants cp
+      JOIN roster r ON cp.student_id = r.id
+      WHERE cp.campaign_id = $1
+      ORDER BY cp.total_raised_cents DESC, r.last_name ASC
+    `, [id]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching participants:', err);
+    res.status(500).json({ error: 'Failed to fetch participants' });
+  }
+});
+
+// Update campaign
+app.patch('/api/campaigns/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, description, goal_amount_cents, per_student_goal_cents, starts_at, ends_at, is_active } = req.body;
+
+  try {
+    const result = await pool.query(`
+      UPDATE campaigns
+      SET name = COALESCE($1, name),
+          description = COALESCE($2, description),
+          goal_amount_cents = COALESCE($3, goal_amount_cents),
+          per_student_goal_cents = COALESCE($4, per_student_goal_cents),
+          starts_at = COALESCE($5, starts_at),
+          ends_at = COALESCE($6, ends_at),
+          is_active = COALESCE($7, is_active),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $8
+      RETURNING *
+    `, [name, description, goal_amount_cents, per_student_goal_cents, starts_at, ends_at, is_active, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating campaign:', err);
+    res.status(500).json({ error: 'Failed to update campaign' });
+  }
+});
+
+
+// --- PUBLIC FUNDRAISING ROUTES ---
+
+// Get public campaign data
+app.get('/api/public/fundraising/:campaignSlug/:token', async (req, res) => {
+  const { campaignSlug, token } = req.params;
+
+  try {
+    const result = await pool.query(`
+      SELECT 
+        c.name as campaign_name, c.description, c.goal_amount_cents as campaign_goal,
+        c.starts_at, c.ends_at, c.is_active,
+        cp.id as participant_id, cp.personal_goal_cents, cp.total_raised_cents,
+        r.first_name, r.last_name, r.section,
+        e.name as ensemble_name
+      FROM campaign_participants cp
+      JOIN campaigns c ON cp.campaign_id = c.id
+      JOIN roster r ON cp.student_id = r.id
+      LEFT JOIN ensembles e ON c.ensemble_id = e.id
+      WHERE c.slug = $1 AND cp.token = $2
+    `, [campaignSlug, token]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Campaign or participant not found' });
+    }
+
+    const data = result.rows[0];
+
+    // Get overall campaign progress
+    const campaignTotal = await pool.query(`
+      SELECT COALESCE(SUM(total_raised_cents), 0) as total
+      FROM campaign_participants 
+      WHERE campaign_id = (SELECT id FROM campaigns WHERE slug = $1)
+    `, [campaignSlug]);
+
+    res.json({
+      campaign: {
+        name: data.campaign_name,
+        description: data.description,
+        goal_amount_cents: data.campaign_goal,
+        total_raised_cents: parseInt(campaignTotal.rows[0].total),
+        starts_at: data.starts_at,
+        ends_at: data.ends_at,
+        is_active: data.is_active,
+        ensemble_name: data.ensemble_name
+      },
+      participant: {
+        id: data.participant_id,
+        first_name: data.first_name,
+        last_name: data.last_name,
+        section: data.section,
+        personal_goal_cents: data.personal_goal_cents,
+        total_raised_cents: data.total_raised_cents
+      }
+    });
+
+  } catch (err) {
+    console.error('Error fetching public fundraising data:', err);
+    res.status(500).json({ error: 'Failed to fetch data' });
+  }
+});
+
+// Create Stripe Payment Intent (Checkout)
+app.post('/api/public/fundraising/:campaignSlug/:token/checkout', async (req, res) => {
+  const { campaignSlug, token } = req.params;
+  const { amount_cents, donor_name, donor_email, is_anonymous, message } = req.body;
+
+  if (!amount_cents || amount_cents < 50) { // Minimum 50 cents
+    return res.status(400).json({ error: 'Invalid amount' });
+  }
+
+  try {
+    // 1. Validate Campaign & Participant
+    const result = await pool.query(`
+      SELECT c.id as campaign_id, c.director_id, cp.id as participant_id, cp.student_id
+      FROM campaign_participants cp
+      JOIN campaigns c ON cp.campaign_id = c.id
+      WHERE c.slug = $1 AND cp.token = $2 AND c.is_active = true
+    `, [campaignSlug, token]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Campaign not found or inactive' });
+    }
+
+    const { campaign_id, director_id, participant_id, student_id } = result.rows[0];
+
+    // 2. Create Stripe Payment Intent
+    // Note: In a real app, you'd initialize Stripe with the secret key
+    // const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+    // MOCK STRIPE FOR NOW (Since I don't have the key in env yet)
+    // In production, uncomment the stripe logic and remove the mock
+
+    /*
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amount_cents,
+      currency: 'usd',
+      metadata: {
+        campaign_id,
+        participant_id,
+        student_id,
+        director_id,
+        donor_name,
+        donor_email,
+        is_anonymous: is_anonymous ? 'true' : 'false',
+        message,
+        opus_type: 'fundraising_donation'
+      }
+    });
+    
+    res.json({ clientSecret: paymentIntent.client_secret });
+    */
+
+    // MOCK RESPONSE
+    res.json({
+      clientSecret: 'pi_mock_' + Math.random().toString(36).substring(7) + '_secret_' + Math.random().toString(36).substring(7),
+      mock: true,
+      message: "Stripe is mocked. In production, this returns a real clientSecret."
+    });
+
+  } catch (err) {
+    console.error('Error creating payment intent:', err);
+    res.status(500).json({ error: 'Failed to initiate payment' });
+  }
+});
+
+// --- STUDENT ROUTES ---
+
+// Get active campaigns for student
+app.get('/api/student/campaigns', async (req, res) => {
+  // Assuming student auth middleware populates req.user or similar
+  // For now, passing student_email as query param for simplicity/testing
+  const { student_email } = req.query;
+
+  if (!student_email) return res.status(400).json({ error: 'student_email required' });
+
+  try {
+    const result = await pool.query(`
+      SELECT c.*, cp.token, cp.personal_goal_cents, cp.total_raised_cents
+      FROM campaign_participants cp
+      JOIN campaigns c ON cp.campaign_id = c.id
+      JOIN roster r ON cp.student_id = r.id
+      WHERE r.email = $1 AND c.is_active = true
+      ORDER BY c.ends_at ASC
+    `, [student_email]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching student campaigns:', err);
+    res.status(500).json({ error: 'Failed to fetch campaigns' });
+  }
+});
+
+
+// --- STRIPE WEBHOOK ---
+
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+
+  // const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+  let event;
+
+  try {
+    // event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    // MOCK EVENT for now
+    event = req.body;
+  } catch (err) {
+    console.error('Webhook Error:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Handle the event
+  if (event.type === 'payment_intent.succeeded') {
+    const paymentIntent = event.data.object;
+    const { metadata, amount } = paymentIntent;
+
+    if (metadata.opus_type === 'fundraising_donation') {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // 1. Insert Donation
+        await client.query(`
+          INSERT INTO donations (
+            campaign_id, student_id, participant_id, stripe_payment_intent_id,
+            amount_cents, donor_name, donor_email, is_anonymous, message
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT (stripe_payment_intent_id) DO NOTHING
+        `, [
+          metadata.campaign_id,
+          metadata.student_id,
+          metadata.participant_id,
+          paymentIntent.id,
+          amount,
+          metadata.donor_name,
+          metadata.donor_email,
+          metadata.is_anonymous === 'true',
+          metadata.message
+        ]);
+
+        // 2. Update Participant Total
+        await client.query(`
+          UPDATE campaign_participants
+          SET total_raised_cents = total_raised_cents + $1,
+              last_donation_at = CURRENT_TIMESTAMP
+          WHERE id = $2
+        `, [amount, metadata.participant_id]);
+
+        await client.query('COMMIT');
+        console.log(`✅ Donation processed for campaign ${metadata.campaign_id}`);
+      } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Error processing donation webhook:', err);
+        return res.status(500).send('Database error');
+      } finally {
+        client.release();
+      }
+    }
+  }
+
+  res.json({ received: true });
+});
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
