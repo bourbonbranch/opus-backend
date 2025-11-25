@@ -2378,7 +2378,32 @@ app.post('/api/campaigns', async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Error creating campaign:', err);
-    res.status(500).json({ error: 'Failed to create campaign' });
+    console.error('Error details:', {
+      message: err.message,
+      code: err.code,
+      detail: err.detail,
+      constraint: err.constraint
+    });
+
+    // Provide more specific error messages
+    let errorMessage = 'Failed to create campaign';
+    if (err.code === '23503') {
+      // Foreign key violation
+      if (err.constraint && err.constraint.includes('director_id')) {
+        errorMessage = 'Invalid director ID';
+      } else if (err.constraint && err.constraint.includes('ensemble_id')) {
+        errorMessage = 'Invalid ensemble ID';
+      } else {
+        errorMessage = 'Invalid reference: ' + (err.detail || 'foreign key constraint violation');
+      }
+    } else if (err.code === '23505') {
+      // Unique violation
+      errorMessage = 'A campaign with this name already exists';
+    } else if (err.message) {
+      errorMessage = err.message;
+    }
+
+    res.status(500).json({ error: errorMessage, details: err.detail });
   } finally {
     client.release();
   }
