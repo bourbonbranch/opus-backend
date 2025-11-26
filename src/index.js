@@ -3544,6 +3544,10 @@ app.delete('/api/seating-configurations/:id', async (req, res) => {
   }
 });
 
+// Register assignment routes
+const registerAssignmentRoutes = require('./assignments-api');
+registerAssignmentRoutes(app, pool);
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
