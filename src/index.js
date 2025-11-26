@@ -62,6 +62,38 @@ app.post('/auth/signup-director', async (req, res) => {
   }
 });
 
+// Director login
+app.post('/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Missing email or password' });
+    }
+
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    const user = result.rows[0];
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    res.json({
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      role: user.role,
+    });
+  } catch (err) {
+    console.error('Error in /auth/login:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Legacy endpoint kept for compatibility
 app.post('/directors/signup', async (req, res) => {
   try {
