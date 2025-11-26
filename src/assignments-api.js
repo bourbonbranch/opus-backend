@@ -108,6 +108,7 @@ VALUES($1, $2, 'not_started')
         } catch (err) {
             await client.query('ROLLBACK');
             console.error('Error creating assignment:', err);
+            console.error('Request body:', req.body); // Added for debugging
             res.status(500).json({ error: 'Failed to create assignment', details: err.message });
         } finally {
             client.release();
