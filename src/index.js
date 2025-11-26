@@ -3301,7 +3301,8 @@ app.post('/api/seating-configurations', async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Error saving seating configuration:', err);
-    res.status(500).json({ error: 'Failed to save configuration' });
+    console.error('Request body:', req.body);
+    res.status(500).json({ error: 'Failed to save configuration', details: err.message });
   } finally {
     client.release();
   }
