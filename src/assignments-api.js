@@ -1,9 +1,16 @@
-```javascript
 module.exports = function (app, pool) {
     // ==================== ASSIGNMENTS ====================
 
     // Create new assignment
     app.post('/api/assignments', async (req, res) => {
+        const {
+            ensemble_id,
+            title,
+            description,
+            type,
+            due_at,
+            status,
+            piece_id,
             measures_text,
             submission_required,
             grading_type,
@@ -81,7 +88,7 @@ VALUES($1, $2, 'not_started')
                     } else if (target.target_type === 'section' || target.target_type === 'part') {
                         // Students in specific section/part
                         const studentsResult = await client.query(
-                            `SELECT id FROM roster WHERE ensemble_id = $1 AND ${ target.target_type } = $2 AND status = $3`,
+                            `SELECT id FROM roster WHERE ensemble_id = $1 AND ${target.target_type} = $2 AND status = $3`,
                             [ensemble_id, target.target_value, 'active']
                         );
                         for (const student of studentsResult.rows) {
@@ -125,13 +132,13 @@ VALUES($1, $2, 'not_started')
 
             if (status) {
                 paramCount++;
-                query += ` AND a.status = $${ paramCount } `;
+                query += ` AND a.status = $${paramCount} `;
                 params.push(status);
             }
 
             if (type) {
                 paramCount++;
-                query += ` AND a.type = $${ paramCount } `;
+                query += ` AND a.type = $${paramCount} `;
                 params.push(type);
             }
 
