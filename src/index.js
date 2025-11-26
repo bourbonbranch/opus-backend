@@ -3263,13 +3263,24 @@ app.post('/api/seating-configurations', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    // Validate created_by exists in users table if provided
+    let validCreatedBy = null;
+    if (created_by) {
+      const userCheck = await client.query('SELECT id FROM users WHERE id = $1', [created_by]);
+      if (userCheck.rows.length > 0) {
+        validCreatedBy = created_by;
+      } else {
+        console.warn('Invalid created_by user ID:', created_by);
+      }
+    }
+
     // Insert configuration
     const configResult = await client.query(
       `INSERT INTO seating_configurations 
        (ensemble_id, name, description, global_rows, global_module_width, global_tread_depth, is_curved, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [ensemble_id, name, description, global_rows, global_module_width, global_tread_depth, is_curved, created_by]
+      [ensemble_id, name, description, global_rows, global_module_width, global_tread_depth, is_curved, validCreatedBy]
     );
 
     const configId = configResult.rows[0].id;
