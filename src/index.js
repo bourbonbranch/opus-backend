@@ -3183,6 +3183,214 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
   res.json({ received: true });
 });
 
+// ==================== SEATING CONFIGURATIONS ====================
+
+// Save new seating configuration
+app.post('/api/seating-configurations', async (req, res) => {
+  const {
+    ensemble_id,
+    name,
+    description,
+    global_rows,
+    global_module_width,
+    global_tread_depth,
+    is_curved,
+    created_by,
+    sections,
+    placements
+  } = req.body;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Insert configuration
+    const configResult = await client.query(
+      `INSERT INTO seating_configurations 
+       (ensemble_id, name, description, global_rows, global_module_width, global_tread_depth, is_curved, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [ensemble_id, name, description, global_rows, global_module_width, global_tread_depth, is_curved, created_by]
+    );
+
+    const configId = configResult.rows[0].id;
+
+    // Insert sections
+    if (sections && sections.length > 0) {
+      for (const section of sections) {
+        await client.query(
+          `INSERT INTO seating_sections (configuration_id, section_id, section_name, ada_row)
+           VALUES ($1, $2, $3, $4)`,
+          [configId, section.section_id, section.section_name, section.ada_row]
+        );
+      }
+    }
+
+    // Insert placements
+    if (placements && placements.length > 0) {
+      for (const placement of placements) {
+        await client.query(
+          `INSERT INTO seating_placements (configuration_id, student_id, section_id, row, position_index)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [configId, placement.student_id, placement.section_id, placement.row, placement.position_index]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, configuration: configResult.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error saving seating configuration:', err);
+    res.status(500).json({ error: 'Failed to save configuration' });
+  } finally {
+    client.release();
+  }
+});
+
+// Get all configurations for an ensemble
+app.get('/api/seating-configurations', async (req, res) => {
+  const { ensemble_id } = req.query;
+
+  try {
+    const result = await pool.query(
+      `SELECT sc.*, u.first_name, u.last_name,
+        (SELECT COUNT(*) FROM seating_placements WHERE configuration_id = sc.id) as student_count
+       FROM seating_configurations sc
+       LEFT JOIN users u ON sc.created_by = u.id
+       WHERE sc.ensemble_id = $1
+       ORDER BY sc.created_at DESC`,
+      [ensemble_id]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching configurations:', err);
+    res.status(500).json({ error: 'Failed to fetch configurations' });
+  }
+});
+
+// Get specific configuration with all details
+app.get('/api/seating-configurations/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Get configuration
+    const configResult = await pool.query(
+      'SELECT * FROM seating_configurations WHERE id = $1',
+      [id]
+    );
+
+    if (configResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Configuration not found' });
+    }
+
+    const config = configResult.rows[0];
+
+    // Get sections
+    const sectionsResult = await pool.query(
+      'SELECT * FROM seating_sections WHERE configuration_id = $1 ORDER BY section_id',
+      [id]
+    );
+
+    // Get placements with student info
+    const placementsResult = await pool.query(
+      `SELECT sp.*, r.first_name, r.last_name, r.section, r.part
+       FROM seating_placements sp
+       JOIN roster r ON sp.student_id = r.id
+       WHERE sp.configuration_id = $1
+       ORDER BY sp.section_id, sp.row, sp.position_index`,
+      [id]
+    );
+
+    res.json({
+      ...config,
+      sections: sectionsResult.rows,
+      placements: placementsResult.rows
+    });
+  } catch (err) {
+    console.error('Error fetching configuration:', err);
+    res.status(500).json({ error: 'Failed to fetch configuration' });
+  }
+});
+
+// Update configuration
+app.put('/api/seating-configurations/:id', async (req, res) => {
+  const { id } = req.params;
+  const {
+    name,
+    description,
+    global_rows,
+    global_module_width,
+    global_tread_depth,
+    is_curved,
+    sections,
+    placements
+  } = req.body;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Update configuration
+    await client.query(
+      `UPDATE seating_configurations 
+       SET name = $1, description = $2, global_rows = $3, global_module_width = $4,
+           global_tread_depth = $5, is_curved = $6, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7`,
+      [name, description, global_rows, global_module_width, global_tread_depth, is_curved, id]
+    );
+
+    // Delete existing sections and placements
+    await client.query('DELETE FROM seating_sections WHERE configuration_id = $1', [id]);
+    await client.query('DELETE FROM seating_placements WHERE configuration_id = $1', [id]);
+
+    // Insert new sections
+    if (sections && sections.length > 0) {
+      for (const section of sections) {
+        await client.query(
+          `INSERT INTO seating_sections (configuration_id, section_id, section_name, ada_row)
+           VALUES ($1, $2, $3, $4)`,
+          [id, section.section_id, section.section_name, section.ada_row]
+        );
+      }
+    }
+
+    // Insert new placements
+    if (placements && placements.length > 0) {
+      for (const placement of placements) {
+        await client.query(
+          `INSERT INTO seating_placements (configuration_id, student_id, section_id, row, position_index)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [id, placement.student_id, placement.section_id, placement.row, placement.position_index]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error updating configuration:', err);
+    res.status(500).json({ error: 'Failed to update configuration' });
+  } finally {
+    client.release();
+  }
+});
+
+// Delete configuration
+app.delete('/api/seating-configurations/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await pool.query('DELETE FROM seating_configurations WHERE id = $1', [id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting configuration:', err);
+    res.status(500).json({ error: 'Failed to delete configuration' });
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {

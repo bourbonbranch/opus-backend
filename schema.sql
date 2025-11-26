@@ -49,9 +49,9 @@ CREATE TABLE IF NOT EXISTS rooms (
 
 CREATE TABLE IF NOT EXISTS attendance (
   id SERIAL PRIMARY KEY,
-  roster_id INTEGER REFERENCES roster(id) ON DELETE CASCADE,
-  room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
-  check_in_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  student_id INTEGER REFERENCES roster(id) ON DELETE CASCADE,
+  room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+  timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   status TEXT DEFAULT 'present'
 );
 
@@ -77,6 +77,39 @@ CREATE TABLE IF NOT EXISTS calendar_items (
   description TEXT,
   color TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Seating Configuration Tables
+CREATE TABLE IF NOT EXISTS seating_configurations (
+  id SERIAL PRIMARY KEY,
+  ensemble_id INTEGER REFERENCES ensembles(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  global_rows INTEGER NOT NULL,
+  global_module_width NUMERIC NOT NULL,
+  global_tread_depth NUMERIC NOT NULL,
+  is_curved BOOLEAN DEFAULT true,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS seating_sections (
+  id SERIAL PRIMARY KEY,
+  configuration_id INTEGER REFERENCES seating_configurations(id) ON DELETE CASCADE,
+  section_id INTEGER NOT NULL,
+  section_name TEXT NOT NULL,
+  ada_row INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS seating_placements (
+  id SERIAL PRIMARY KEY,
+  configuration_id INTEGER REFERENCES seating_configurations(id) ON DELETE CASCADE,
+  student_id INTEGER REFERENCES roster(id) ON DELETE CASCADE,
+  section_id INTEGER NOT NULL,
+  row INTEGER NOT NULL,
+  position_index INTEGER NOT NULL,
+  UNIQUE(configuration_id, student_id)
 );
 
 CREATE TABLE IF NOT EXISTS ensemble_sections (
