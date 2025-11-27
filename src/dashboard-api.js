@@ -37,7 +37,7 @@ module.exports = function (app, pool) {
                 JOIN roster r ON a.roster_id = r.id
                 JOIN ensembles e ON r.ensemble_id = e.id
                 WHERE e.director_id = $1
-                AND a.timestamp >= $2 AND a.timestamp <= $3
+                AND a.check_in_time >= $2 AND a.check_in_time <= $3
             `, [director_id, todayStart.toISOString(), todayEnd.toISOString()]);
 
             const presentCount = parseInt(attendanceResult.rows[0].present_count || 0);
