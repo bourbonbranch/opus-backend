@@ -184,3 +184,14 @@ CREATE TABLE IF NOT EXISTS ensemble_parts (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(section_id, name)
 );
+
+CREATE TABLE IF NOT EXISTS ensemble_files (
+  id SERIAL PRIMARY KEY,
+  ensemble_id INTEGER REFERENCES ensembles(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  file_type TEXT,
+  storage_url TEXT NOT NULL,
+  file_size INTEGER,
+  uploaded_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
