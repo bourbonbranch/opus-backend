@@ -61,7 +61,7 @@ module.exports = function (app, pool) {
             });
         } catch (err) {
             console.error('Error fetching today summary:', err);
-            res.status(500).json({ error: 'Failed to fetch today summary' });
+            res.status(500).json({ error: 'Failed to fetch today summary: ' + err.message });
         }
     });
 
