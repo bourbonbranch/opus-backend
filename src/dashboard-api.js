@@ -16,13 +16,11 @@ module.exports = function (app, pool) {
             todayEnd.setHours(23, 59, 59, 999);
 
             const nextEventResult = await pool.query(`
-                SELECT e.*, r.name as room_name
-                FROM events e
-                LEFT JOIN rooms r ON e.room_id = r.id
-                JOIN ensembles ens ON e.ensemble_id = ens.id
-                WHERE ens.director_id = $1
-                AND e.start_time >= $2 AND e.start_time <= $3
-                ORDER BY e.start_time ASC
+                SELECT ci.*
+                FROM calendar_items ci
+                WHERE ci.director_id = $1
+                AND ci.date >= $2 AND ci.date <= $3
+                ORDER BY ci.date ASC
                 LIMIT 1
             `, [director_id, todayStart.toISOString(), todayEnd.toISOString()]);
 
@@ -81,10 +79,10 @@ module.exports = function (app, pool) {
                     e.level,
                     (SELECT COUNT(*) FROM roster r WHERE r.ensemble_id = e.id AND r.status = 'active') as member_count,
                     (
-                        SELECT start_time 
-                        FROM events ev 
-                        WHERE ev.ensemble_id = e.id AND ev.start_time >= NOW() 
-                        ORDER BY ev.start_time ASC 
+                        SELECT date 
+                        FROM calendar_items ci 
+                        WHERE ci.ensemble_id = e.id AND ci.date >= NOW() 
+                        ORDER BY ci.date ASC 
                         LIMIT 1
                     ) as next_event_date
                 FROM ensembles e
@@ -154,19 +152,18 @@ module.exports = function (app, pool) {
 
             const result = await pool.query(`
                 SELECT 
-                    e.id, 
-                    e.name, 
-                    e.type, 
-                    e.start_time, 
-                    e.end_time, 
-                    e.location,
+                    ci.id, 
+                    ci.title as name, 
+                    ci.type, 
+                    ci.date as start_time, 
+                    ci.description,
                     ens.name as ensemble_name,
                     ens.color_hex as ensemble_color
-                FROM events e
-                JOIN ensembles ens ON e.ensemble_id = ens.id
-                WHERE ens.director_id = $1
-                AND e.start_time >= NOW() AND e.start_time <= $2
-                ORDER BY e.start_time ASC
+                FROM calendar_items ci
+                LEFT JOIN ensembles ens ON ci.ensemble_id = ens.id
+                WHERE ci.director_id = $1
+                AND ci.date >= NOW() AND ci.date <= $2
+                ORDER BY ci.date ASC
             `, [director_id, endDate.toISOString()]);
 
             res.json(result.rows);
