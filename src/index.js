@@ -966,11 +966,10 @@ app.get('/events', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT e.*, r.name as room_name
-       FROM events e
-       LEFT JOIN rooms r ON e.room_id = r.id
-       WHERE e.ensemble_id = $1
-       ORDER BY e.start_time ASC`,
+      `SELECT id, title as name, type, date as start_time, date as end_time, description, ensemble_id, created_at
+       FROM calendar_items
+       WHERE ensemble_id = $1
+       ORDER BY date ASC`,
       [ensemble_id]
     );
     res.json(result.rows);
@@ -984,16 +983,23 @@ app.get('/events', async (req, res) => {
 app.post('/events', async (req, res) => {
   const { ensemble_id, room_id, name, type, start_time, end_time, description } = req.body;
 
-  if (!ensemble_id || !name || !type || !start_time || !end_time) {
+  if (!ensemble_id || !name || !type || !start_time) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
+  // Get director_id from ensemble
+  const directorResult = await pool.query('SELECT director_id FROM ensembles WHERE id = $1', [ensemble_id]);
+  if (directorResult.rows.length === 0) {
+    return res.status(404).json({ error: 'Ensemble not found' });
+  }
+  const director_id = directorResult.rows[0].director_id;
+
   try {
     const result = await pool.query(
-      `INSERT INTO events (ensemble_id, room_id, name, type, start_time, end_time, description)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO calendar_items (director_id, ensemble_id, title, type, date, description)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [ensemble_id, room_id || null, name, type, start_time, end_time, description || null]
+      [director_id, ensemble_id, name, type, start_time, description || null]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -1005,15 +1011,15 @@ app.post('/events', async (req, res) => {
 // Update an event
 app.put('/events/:id', async (req, res) => {
   const { id } = req.params;
-  const { room_id, name, type, start_time, end_time, description } = req.body;
+  const { name, type, start_time, description } = req.body;
 
   try {
     const result = await pool.query(
-      `UPDATE events
-       SET room_id = $1, name = $2, type = $3, start_time = $4, end_time = $5, description = $6
-       WHERE id = $7
+      `UPDATE calendar_items
+       SET title = $1, type = $2, date = $3, description = $4
+       WHERE id = $5
        RETURNING *`,
-      [room_id || null, name, type, start_time, end_time, description || null, id]
+      [name, type, start_time, description || null, id]
     );
 
     if (result.rows.length === 0) {
@@ -1032,7 +1038,7 @@ app.delete('/events/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const result = await pool.query('DELETE FROM events WHERE id = $1 RETURNING id', [id]);
+    const result = await pool.query('DELETE FROM calendar_items WHERE id = $1 RETURNING id', [id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
