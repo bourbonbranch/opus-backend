@@ -62,6 +62,41 @@ app.post('/auth/signup-director', async (req, res) => {
   }
 });
 
+// Migrate legacy data (ensembles from ID 1 or 64 to current user)
+app.post('/api/migrate-legacy-data', async (req, res) => {
+  const { director_id } = req.body;
+  if (!director_id) return res.status(400).json({ error: 'director_id is required' });
+
+  try {
+    // Update ensembles
+    const result = await pool.query(`
+      UPDATE ensembles 
+      SET director_id = $1 
+      WHERE director_id IN (1, 64) 
+      AND id NOT IN (SELECT id FROM ensembles WHERE director_id = $1)
+      RETURNING id, name
+    `, [director_id]);
+
+    // Also update rooms, etc? For now just ensembles is the critical part.
+    // The cascade might handle others or they might be independent.
+    // Rooms have director_id too.
+    await pool.query(`
+      UPDATE rooms 
+      SET director_id = $1 
+      WHERE director_id IN (1, 64)
+    `, [director_id]);
+
+    res.json({
+      message: 'Migration successful',
+      migrated_ensembles: result.rows.length,
+      details: result.rows
+    });
+  } catch (err) {
+    console.error('Error migrating legacy data:', err);
+    res.status(500).json({ error: 'Failed to migrate data' });
+  }
+});
+
 // Director login
 app.post('/auth/login', async (req, res) => {
   try {
@@ -124,6 +159,7 @@ app.post('/directors/signup', async (req, res) => {
 });
 
 // Get all ensembles for a director
+// Get all ensembles for a director
 app.get('/ensembles', async (req, res) => {
   try {
     const directorId = req.query.director_id;
@@ -131,10 +167,40 @@ app.get('/ensembles', async (req, res) => {
       return res.status(400).json({ error: 'director_id is required' });
     }
 
-    const result = await pool.query(
+    let result = await pool.query(
       'SELECT * FROM ensembles WHERE director_id = $1 ORDER BY created_at DESC',
       [directorId]
     );
+
+    // AUTO-MIGRATION: If user has no ensembles, check for legacy ones (ID 1 or 64) and claim them
+    if (result.rows.length === 0) {
+      console.log(`[Ensembles] No ensembles found for ${directorId}. Checking for legacy data...`);
+
+      const claimResult = await pool.query(`
+          UPDATE ensembles 
+          SET director_id = $1 
+          WHERE director_id IN (1, 64)
+          RETURNING id
+      `, [directorId]);
+
+      if (claimResult.rows.length > 0) {
+        console.log(`[Ensembles] Auto-claimed ${claimResult.rows.length} ensembles for director ${directorId}`);
+
+        // Also update related rooms
+        await pool.query(`
+              UPDATE rooms 
+              SET director_id = $1 
+              WHERE director_id IN (1, 64)
+          `, [directorId]);
+
+        // Re-run the fetch query
+        result = await pool.query(
+          'SELECT * FROM ensembles WHERE director_id = $1 ORDER BY created_at DESC',
+          [directorId]
+        );
+      }
+    }
+
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching ensembles:', err);
@@ -932,7 +998,7 @@ app.post('/events', async (req, res) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error('Error creating event:', err);
-    res.status(500).json({ error: 'Failed to create event' });
+    res.status(500).json({ error: 'Failed to create event: ' + err.message });
   }
 });
 
@@ -3579,6 +3645,10 @@ app.delete('/api/seating-configurations/:id', async (req, res) => {
 // Register assignment routes
 const registerAssignmentRoutes = require('./assignments-api');
 registerAssignmentRoutes(app, pool);
+
+// Register dashboard routes
+const registerDashboardRoutes = require('./dashboard-api');
+registerDashboardRoutes(app, pool);
 
 // Start server
 const PORT = process.env.PORT || 8080;
