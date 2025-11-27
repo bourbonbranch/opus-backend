@@ -58,8 +58,8 @@ module.exports = function (app, pool) {
                 FROM assignments a
                 JOIN ensembles ens ON a.ensemble_id = ens.id
                 WHERE ens.director_id = $1
-                AND a.due_at >= $2 AND a.due_at <= $3
-            `, [director_id, new Date().toISOString(), nextWeek.toISOString()]);
+                AND a.due_at >= $2
+            `, [director_id, todayStart.toISOString()]);
 
             const assignmentsCount = parseInt(assignmentsResult.rows[0].count);
 
