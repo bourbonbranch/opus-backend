@@ -28,12 +28,13 @@ module.exports = function (app, pool) {
 
             // 2. Attendance Summary
             // Calculate attendance for today across all ensembles
+            // Note: Using roster_id as column name based on error feedback
             const attendanceResult = await pool.query(`
                 SELECT 
                     COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present_count,
                     COUNT(*) as total_count
                 FROM attendance a
-                JOIN roster r ON a.student_id = r.id
+                JOIN roster r ON a.roster_id = r.id
                 JOIN ensembles e ON r.ensemble_id = e.id
                 WHERE e.director_id = $1
                 AND a.timestamp >= $2 AND a.timestamp <= $3
