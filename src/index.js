@@ -3428,6 +3428,29 @@ app.post('/api/migrate-assignments-tables', async (req, res) => {
   }
 });
 
+// Migration endpoint for ensemble_files table
+app.post('/api/migrate-ensemble-files', async (req, res) => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ensemble_files (
+        id SERIAL PRIMARY KEY,
+        ensemble_id INTEGER REFERENCES ensembles(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        file_type TEXT,
+        storage_url TEXT NOT NULL,
+        file_size INTEGER,
+        uploaded_by INTEGER REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    res.json({ success: true, message: 'ensemble_files table created successfully' });
+  } catch (err) {
+    console.error('Migration error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==================== SEATING CONFIGURATIONS ====================
 
 // Save new seating configuration
