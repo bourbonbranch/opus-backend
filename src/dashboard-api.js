@@ -26,12 +26,26 @@ module.exports = function (app, pool) {
 
             const nextEvent = nextEventResult.rows[0] || null;
 
-            // 2. Attendance Summary (placeholder logic for now)
-            // In a real app, we'd check if attendance was taken for the current/latest event
+            // 2. Attendance Summary
+            // Calculate attendance for today across all ensembles
+            const attendanceResult = await pool.query(`
+                SELECT 
+                    COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present_count,
+                    COUNT(*) as total_count
+                FROM attendance a
+                JOIN roster r ON a.student_id = r.id
+                JOIN ensembles e ON r.ensemble_id = e.id
+                WHERE e.director_id = $1
+                AND a.timestamp >= $2 AND a.timestamp <= $3
+            `, [director_id, todayStart.toISOString(), todayEnd.toISOString()]);
+
+            const presentCount = parseInt(attendanceResult.rows[0].present_count || 0);
+            const totalAttendance = parseInt(attendanceResult.rows[0].total_count || 0);
+
             const attendanceSummary = {
-                taken: false,
-                present: 0,
-                total: 0
+                taken: totalAttendance > 0,
+                present: presentCount,
+                total: totalAttendance
             };
 
             // 3. Assignments Summary (due in next 7 days)
