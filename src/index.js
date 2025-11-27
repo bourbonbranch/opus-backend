@@ -3713,7 +3713,6 @@ const registerAssignmentRoutes = require('./assignments-api');
 registerAssignmentRoutes(app, pool);
 
 // Register dashboard routes
-// Register dashboard routes
 const registerDashboardRoutes = require('./dashboard-api');
 registerDashboardRoutes(app, pool);
 
