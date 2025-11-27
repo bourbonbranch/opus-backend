@@ -10,8 +10,34 @@ const app = express();
 // ✅ BODY PARSER MUST COME FIRST (before CORS and routes)
 app.use(express.json());
 
-// CORS - TEMP while validating multiple Vercel preview URLs
-app.use(cors({ origin: true, credentials: true }));
+// CORS - Allow Vercel deployments and localhost
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  /^https:\/\/.*\.vercel\.app$/,  // All Vercel deployments
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    // Check if origin matches any allowed pattern
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (allowed instanceof RegExp) {
+        return allowed.test(origin);
+      }
+      return allowed === origin;
+    });
+
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
 
 // Root
 app.get('/', (req, res) => {
