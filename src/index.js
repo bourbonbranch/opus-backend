@@ -643,11 +643,21 @@ app.post('/api/ensembles/:id/files', async (req, res) => {
       return res.status(400).json({ error: 'title is required' });
     }
 
+    // Verify uploaded_by references an existing user; if not, set to null
+    let uploaderId = uploaded_by;
+    if (uploaded_by) {
+      const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [uploaded_by]);
+      if (userCheck.rowCount === 0) {
+        console.warn(`Uploaded_by user ${uploaded_by} not found, setting to null`);
+        uploaderId = null;
+      }
+    }
+
     const result = await pool.query(`
       INSERT INTO ensemble_files (ensemble_id, title, file_type, storage_url, file_size, uploaded_by)
       VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING *
-    `, [id, title, file_type, storage_url, file_size, uploaded_by]);
+    `, [id, title, file_type, storage_url, file_size, uploaderId]);
 
     res.status(201).json(result.rows[0]);
   } catch (err) {
