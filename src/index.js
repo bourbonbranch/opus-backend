@@ -626,7 +626,7 @@ app.post('/api/ensembles/:id/files', async (req, res) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error('Error uploading file:', err);
-    res.status(500).json({ error: 'Failed to upload file' });
+    res.status(500).json({ error: 'Failed to upload file: ' + err.message });
   }
 });
 
