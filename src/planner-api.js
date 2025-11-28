@@ -20,8 +20,6 @@ module.exports = function (app, pool) {
 
     // ==================== SECTIONS ====================
 
-    // ==================== SECTIONS ====================
-
     // GET /api/pieces/:pieceId/sections
     app.get('/api/pieces/:pieceId/sections', async (req, res) => {
         try {
