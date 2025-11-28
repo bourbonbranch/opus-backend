@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const bcrypt = require('bcryptjs');
 const { pool } = require('./db');
+const donorService = require('./donor-service');
 
 const app = express();
 
@@ -3102,6 +3103,321 @@ app.patch('/api/campaigns/:id', async (req, res) => {
 });
 
 
+// --- DONOR CRM MODULE ---
+
+// Get all donors for an ensemble
+app.get('/api/donors', async (req, res) => {
+  const { ensembleId, search, tags, minTotal, maxTotal, lastDonationAfter, lastDonationBefore, sortBy, sortOrder, limit, offset } = req.query;
+
+  if (!ensembleId) {
+    return res.status(400).json({ error: 'ensembleId is required' });
+  }
+
+  try {
+    const donors = await donorService.getDonors(parseInt(ensembleId), {
+      search,
+      tags: tags ? tags.split(',') : undefined,
+      minTotal: minTotal ? parseInt(minTotal) : undefined,
+      maxTotal: maxTotal ? parseInt(maxTotal) : undefined,
+      lastDonationAfter,
+      lastDonationBefore,
+      sortBy,
+      sortOrder,
+      limit: limit ? parseInt(limit) : 50,
+      offset: offset ? parseInt(offset) : 0
+    });
+
+    res.json(donors);
+  } catch (err) {
+    console.error('Error fetching donors:', err);
+    res.status(500).json({ error: 'Failed to fetch donors' });
+  }
+});
+
+// Get single donor by ID
+app.get('/api/donors/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const donor = await donorService.getDonorById(parseInt(id));
+
+    if (!donor) {
+      return res.status(404).json({ error: 'Donor not found' });
+    }
+
+    res.json(donor);
+  } catch (err) {
+    console.error('Error fetching donor:', err);
+    res.status(500).json({ error: 'Failed to fetch donor' });
+  }
+});
+
+// Create donor manually
+app.post('/api/donors', async (req, res) => {
+  const { ensembleId, email, firstName, lastName, organizationName, phone, address, tags, notes } = req.body;
+
+  if (!ensembleId || !email) {
+    return res.status(400).json({ error: 'ensembleId and email are required' });
+  }
+
+  try {
+    const donor = await donorService.findOrCreateDonor(email, ensembleId, {
+      firstName,
+      lastName,
+      organizationName,
+      phone,
+      addressLine1: address?.line1,
+      addressLine2: address?.line2,
+      city: address?.city,
+      state: address?.state,
+      postalCode: address?.postalCode,
+      country: address?.country
+    });
+
+    // Update tags and notes if provided
+    if (tags || notes) {
+      const updated = await donorService.updateDonor(donor.id, { tags, notes });
+      return res.json(updated);
+    }
+
+    res.json(donor);
+  } catch (err) {
+    console.error('Error creating donor:', err);
+    res.status(500).json({ error: 'Failed to create donor' });
+  }
+});
+
+// Update donor
+app.patch('/api/donors/:id', async (req, res) => {
+  const { id } = req.params;
+  const updates = req.body;
+
+  try {
+    const donor = await donorService.updateDonor(parseInt(id), updates);
+    res.json(donor);
+  } catch (err) {
+    console.error('Error updating donor:', err);
+    res.status(500).json({ error: 'Failed to update donor' });
+  }
+});
+
+// Get donations (with filters)
+app.get('/api/donations', async (req, res) => {
+  const { ensembleId, donorId, campaignId, startDate, endDate, limit, offset } = req.query;
+
+  try {
+    let query = 'SELECT d.*, c.name as campaign_name, r.first_name as student_first_name, r.last_name as student_last_name FROM donations d LEFT JOIN campaigns c ON d.campaign_id = c.id LEFT JOIN roster r ON d.student_id = r.id WHERE 1=1';
+    const params = [];
+    let paramIndex = 1;
+
+    if (ensembleId) {
+      query += ` AND c.ensemble_id = $${paramIndex}`;
+      params.push(parseInt(ensembleId));
+      paramIndex++;
+    }
+
+    if (donorId) {
+      query += ` AND d.donor_id = $${paramIndex}`;
+      params.push(parseInt(donorId));
+      paramIndex++;
+    }
+
+    if (campaignId) {
+      query += ` AND d.campaign_id = $${paramIndex}`;
+      params.push(parseInt(campaignId));
+      paramIndex++;
+    }
+
+    if (startDate) {
+      query += ` AND d.created_at >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+    }
+
+    if (endDate) {
+      query += ` AND d.created_at <= $${paramIndex}`;
+      params.push(endDate);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY d.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(limit ? parseInt(limit) : 50, offset ? parseInt(offset) : 0);
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching donations:', err);
+    res.status(500).json({ error: 'Failed to fetch donations' });
+  }
+});
+
+// Get single donation
+app.get('/api/donations/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT d.*, c.name as campaign_name, don.first_name as donor_first_name, don.last_name as donor_last_name, don.email as donor_email
+       FROM donations d
+       LEFT JOIN campaigns c ON d.campaign_id = c.id
+       LEFT JOIN donors don ON d.donor_id = don.id
+       WHERE d.id = $1`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Donation not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error fetching donation:', err);
+    res.status(500).json({ error: 'Failed to fetch donation' });
+  }
+});
+
+// Get donor activities
+app.get('/api/donors/:id/activities', async (req, res) => {
+  const { id } = req.params;
+  const { limit, offset } = req.query;
+
+  try {
+    const result = await pool.query(
+      `SELECT * FROM donor_activities
+       WHERE donor_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [id, limit ? parseInt(limit) : 50, offset ? parseInt(offset) : 0]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching activities:', err);
+    res.status(500).json({ error: 'Failed to fetch activities' });
+  }
+});
+
+// Add manual activity
+app.post('/api/donors/:id/activities', async (req, res) => {
+  const { id } = req.params;
+  const { ensembleId, type, summary, details } = req.body;
+
+  if (!ensembleId || !type || !summary) {
+    return res.status(400).json({ error: 'ensembleId, type, and summary are required' });
+  }
+
+  try {
+    const activity = await donorService.logActivity(
+      parseInt(id),
+      parseInt(ensembleId),
+      type,
+      summary,
+      details
+    );
+
+    res.json(activity);
+  } catch (err) {
+    console.error('Error creating activity:', err);
+    res.status(500).json({ error: 'Failed to create activity' });
+  }
+});
+
+// Get donor reports summary
+app.get('/api/donor-reports/summary', async (req, res) => {
+  const { ensembleId, year } = req.query;
+
+  if (!ensembleId) {
+    return res.status(400).json({ error: 'ensembleId is required' });
+  }
+
+  try {
+    const currentYear = year ? parseInt(year) : new Date().getFullYear();
+
+    // Total given this year
+    const totalYearResult = await pool.query(
+      `SELECT COALESCE(SUM(d.amount_cents), 0) as total
+       FROM donations d
+       JOIN campaigns c ON d.campaign_id = c.id
+       WHERE c.ensemble_id = $1
+       AND EXTRACT(YEAR FROM d.created_at) = $2`,
+      [ensembleId, currentYear]
+    );
+
+    // Total donors
+    const totalDonorsResult = await pool.query(
+      'SELECT COUNT(*) as count FROM donors WHERE ensemble_id = $1',
+      [ensembleId]
+    );
+
+    // New donors this year
+    const newDonorsResult = await pool.query(
+      `SELECT COUNT(*) as count FROM donors
+       WHERE ensemble_id = $1
+       AND EXTRACT(YEAR FROM first_donation_at) = $2`,
+      [ensembleId, currentYear]
+    );
+
+    // Top 10 donors
+    const topDonorsResult = await pool.query(
+      `SELECT id, first_name, last_name, organization_name, email, lifetime_donation_cents
+       FROM donors
+       WHERE ensemble_id = $1
+       ORDER BY lifetime_donation_cents DESC
+       LIMIT 10`,
+      [ensembleId]
+    );
+
+    res.json({
+      totalGivenThisYear: totalYearResult.rows[0].total,
+      totalDonors: parseInt(totalDonorsResult.rows[0].count),
+      newDonorsThisYear: parseInt(newDonorsResult.rows[0].count),
+      topDonors: topDonorsResult.rows
+    });
+  } catch (err) {
+    console.error('Error fetching donor reports:', err);
+    res.status(500).json({ error: 'Failed to fetch donor reports' });
+  }
+});
+
+// Send donation receipt (stub for now)
+app.post('/api/donations/:id/send-receipt', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Get donation details
+    const donationResult = await pool.query(
+      `SELECT d.*, don.email, don.first_name, don.last_name, c.name as campaign_name
+       FROM donations d
+       LEFT JOIN donors don ON d.donor_id = don.id
+       LEFT JOIN campaigns c ON d.campaign_id = c.id
+       WHERE d.id = $1`,
+      [id]
+    );
+
+    if (donationResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Donation not found' });
+    }
+
+    const donation = donationResult.rows[0];
+
+    // TODO: Implement actual email sending
+    // For now, just mark as sent
+    await pool.query(
+      'UPDATE donations SET receipt_sent_at = CURRENT_TIMESTAMP WHERE id = $1',
+      [id]
+    );
+
+    console.log('Receipt would be sent to:', donation.email);
+    console.log('Donation amount:', donation.amount_cents / 100);
+
+    res.json({ success: true, message: 'Receipt sent (stubbed)' });
+  } catch (err) {
+    console.error('Error sending receipt:', err);
+    res.status(500).json({ error: 'Failed to send receipt' });
+  }
+});
+
+
 // --- PUBLIC FUNDRAISING ROUTES ---
 
 // Get public campaign data
@@ -3282,12 +3598,37 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
       try {
         await client.query('BEGIN');
 
-        // 1. Insert Donation
+        // Get campaign details for ensemble_id
+        const campaignResult = await client.query(
+          'SELECT ensemble_id, name FROM campaigns WHERE id = $1',
+          [metadata.campaign_id]
+        );
+
+        if (campaignResult.rows.length === 0) {
+          throw new Error(`Campaign ${metadata.campaign_id} not found`);
+        }
+
+        const campaign = campaignResult.rows[0];
+
+        // 1. Find or create donor
+        let donor = null;
+        if (metadata.donor_email) {
+          donor = await donorService.findOrCreateDonor(
+            metadata.donor_email,
+            campaign.ensemble_id,
+            {
+              firstName: metadata.donor_name?.split(' ')[0],
+              lastName: metadata.donor_name?.split(' ').slice(1).join(' ')
+            }
+          );
+        }
+
+        // 2. Insert Donation with donor_id
         await client.query(`
           INSERT INTO donations (
             campaign_id, student_id, participant_id, stripe_payment_intent_id,
-            amount_cents, donor_name, donor_email, is_anonymous, message
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            amount_cents, donor_name, donor_email, is_anonymous, message, donor_id
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
           ON CONFLICT (stripe_payment_intent_id) DO NOTHING
         `, [
           metadata.campaign_id,
@@ -3298,10 +3639,11 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
           metadata.donor_name,
           metadata.donor_email,
           metadata.is_anonymous === 'true',
-          metadata.message
+          metadata.message,
+          donor?.id
         ]);
 
-        // 2. Update Participant Total
+        // 3. Update Participant Total
         await client.query(`
           UPDATE campaign_participants
           SET total_raised_cents = total_raised_cents + $1,
@@ -3309,8 +3651,26 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
           WHERE id = $2
         `, [amount, metadata.participant_id]);
 
+        // 4. Log donor activity
+        if (donor) {
+          const studentName = metadata.student_id ?
+            `(P2P for student ${metadata.student_id})` : '';
+          await donorService.logActivity(
+            donor.id,
+            campaign.ensemble_id,
+            'donation',
+            `Donated $${(amount / 100).toFixed(2)} to ${campaign.name} ${studentName}`,
+            {
+              campaign_id: metadata.campaign_id,
+              amount_cents: amount,
+              student_id: metadata.student_id,
+              payment_intent_id: paymentIntent.id
+            }
+          );
+        }
+
         await client.query('COMMIT');
-        console.log(`✅ Donation processed for campaign ${metadata.campaign_id}`);
+        console.log(`✅ Donation processed for campaign ${metadata.campaign_id}${donor ? ` (Donor ID: ${donor.id})` : ''}`);
       } catch (err) {
         await client.query('ROLLBACK');
         console.error('Error processing donation webhook:', err);
