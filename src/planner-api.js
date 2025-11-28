@@ -109,12 +109,12 @@ module.exports = function (app, pool) {
     app.post('/api/pieces/:pieceId/annotations', async (req, res) => {
         try {
             const { pieceId } = req.params;
-            const { page_number, x, y, category, note_text, section_id, measure_start, measure_end, created_by } = req.body;
+            const { page_number, x, y, category, note_text, section_id, measure_start, measure_end, created_by, type, data, is_published } = req.body;
             const result = await pool.query(`
-                INSERT INTO score_annotations (piece_id, page_number, x, y, category, note_text, section_id, measure_start, measure_end, created_by)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                INSERT INTO score_annotations (piece_id, page_number, x, y, category, note_text, section_id, measure_start, measure_end, created_by, type, data, is_published)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 RETURNING *
-            `, [pieceId, page_number, x, y, category, note_text, section_id, measure_start, measure_end, created_by]);
+            `, [pieceId, page_number, x, y, category, note_text, section_id, measure_start, measure_end, created_by, type || 'text', data, is_published || false]);
             res.status(201).json(result.rows[0]);
         } catch (err) {
             console.error('Error creating annotation:', err);
@@ -126,17 +126,20 @@ module.exports = function (app, pool) {
     app.patch('/api/annotations/:id', async (req, res) => {
         try {
             const { id } = req.params;
-            const { x, y, category, note_text } = req.body;
+            const { x, y, category, note_text, type, data, is_published } = req.body;
             const result = await pool.query(`
                 UPDATE score_annotations 
                 SET x = COALESCE($1, x),
                     y = COALESCE($2, y),
                     category = COALESCE($3, category),
                     note_text = COALESCE($4, note_text),
+                    type = COALESCE($5, type),
+                    data = COALESCE($6, data),
+                    is_published = COALESCE($7, is_published),
                     updated_at = CURRENT_TIMESTAMP
-                WHERE id = $5
+                WHERE id = $8
                 RETURNING *
-            `, [x, y, category, note_text, id]);
+            `, [x, y, category, note_text, type, data, is_published, id]);
             res.json(result.rows[0]);
         } catch (err) {
             console.error('Error updating annotation:', err);

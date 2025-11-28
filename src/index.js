@@ -3799,6 +3799,28 @@ app.post('/api/migrate-planner-tables', async (req, res) => {
   }
 });
 
+// Migration for annotation features
+app.post('/api/migrate-annotation-features', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      ALTER TABLE score_annotations 
+      ADD COLUMN IF NOT EXISTS type VARCHAR(50) DEFAULT 'text',
+      ADD COLUMN IF NOT EXISTS data TEXT,
+      ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT false;
+    `);
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Annotation features added successfully' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration error:', err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
