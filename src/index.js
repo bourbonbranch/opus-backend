@@ -5,6 +5,7 @@ require('dotenv').config();
 const bcrypt = require('bcryptjs');
 const { pool } = require('./db');
 const donorService = require('./donor-service');
+const feeService = require('./fees-service');
 
 const app = express();
 
@@ -4178,6 +4179,78 @@ app.post('/api/migrate-annotation-features', async (req, res) => {
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
+  }
+});
+
+// Fee Definitions
+app.get('/api/fees/definitions', async (req, res) => {
+  try {
+    const { ensembleId } = req.query;
+    const definitions = await feeService.getFeeDefinitions(ensembleId);
+    res.json(definitions);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/fees/definitions', async (req, res) => {
+  try {
+    const { ensembleId, ...data } = req.body;
+    const definition = await feeService.createFeeDefinition(ensembleId, data);
+    res.json(definition);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fee Assignments
+app.post('/api/fees/assignments', async (req, res) => {
+  try {
+    const assignment = await feeService.assignFee(req.body);
+    res.json(assignment);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/fees/assignments/bulk', async (req, res) => {
+  try {
+    const assignments = await feeService.bulkAssignFee(req.body);
+    res.json(assignments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Member Fees
+app.get('/api/members/:studentId/fees', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const fees = await feeService.getMemberFees(studentId);
+    res.json(fees);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Ensemble Fee Summary
+app.get('/api/ensembles/:ensembleId/fees/summary', async (req, res) => {
+  try {
+    const { ensembleId } = req.params;
+    const summary = await feeService.getEnsembleFeeSummary(ensembleId);
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fee Payments
+app.post('/api/fees/payments', async (req, res) => {
+  try {
+    const payment = await feeService.recordPayment(req.body);
+    res.json(payment);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
