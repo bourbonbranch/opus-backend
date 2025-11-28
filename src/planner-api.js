@@ -1,5 +1,24 @@
 module.exports = function (app, pool) {
     console.log('✅ Planner API routes registered');
+    // ==================== FILES ====================
+    // GET /api/files/:id - fetch a single piece (ensemble_files)
+    app.get('/api/files/:id', async (req, res) => {
+        try {
+            const { id } = req.params;
+            const result = await pool.query(`
+      SELECT * FROM ensemble_files WHERE id = $1
+    `, [id]);
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: 'File not found' });
+            }
+            res.json(result.rows[0]);
+        } catch (err) {
+            console.error('Error fetching file:', err);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // ==================== SECTIONS ====================
 
     // ==================== SECTIONS ====================
 
