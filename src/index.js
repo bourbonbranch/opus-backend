@@ -4451,15 +4451,7 @@ app.get('/api/students/rehearsals', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-// DEBUG ENDPOINT - REMOVE AFTER USE
-app.get('/api/debug/roster', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT id, first_name, last_name, email, ensemble_id FROM roster ORDER BY id DESC LIMIT 50');
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
