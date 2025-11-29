@@ -171,6 +171,34 @@ const FeeService = {
         } finally {
             client.release();
         }
+    },
+
+    // Delete fee assignment
+    async deleteFeeAssignment(assignmentId) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Delete associated payments first (cascade)
+            await client.query(
+                `DELETE FROM fee_payments WHERE fee_assignment_id = $1`,
+                [assignmentId]
+            );
+
+            // Delete the assignment
+            const result = await client.query(
+                `DELETE FROM fee_assignments WHERE id = $1 RETURNING *`,
+                [assignmentId]
+            );
+
+            await client.query('COMMIT');
+            return result.rows[0];
+        } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
+        }
     }
 };
 

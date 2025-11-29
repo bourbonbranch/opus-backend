@@ -4254,6 +4254,72 @@ app.post('/api/fees/payments', async (req, res) => {
   }
 });
 
+// Student API - Get my ensemble data based on email
+app.get('/api/students/me', async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Find roster entries matching this email
+    const rosterResult = await pool.query(
+      `SELECT r.*, e.name as ensemble_name, e.id as ensemble_id
+       FROM roster r
+       JOIN ensembles e ON r.ensemble_id = e.id
+       WHERE LOWER(r.email) = LOWER($1)`,
+      [email]
+    );
+
+    if (rosterResult.rows.length === 0) {
+      return res.json({ ensembles: [], message: 'No ensemble memberships found' });
+    }
+
+    const ensembles = rosterResult.rows.map(row => ({
+      ensembleId: row.ensemble_id,
+      ensembleName: row.ensemble_name,
+      studentInfo: {
+        id: row.id,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        section: row.section,
+        part: row.part,
+        email: row.email
+      }
+    }));
+
+    res.json({ ensembles });
+  } catch (err) {
+    console.error('Error in /api/students/me:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get rehearsals for a student's ensemble
+app.get('/api/students/rehearsals', async (req, res) => {
+  try {
+    const { ensembleId } = req.query;
+
+    if (!ensembleId) {
+      return res.status(400).json({ error: 'ensembleId is required' });
+    }
+
+    const result = await pool.query(
+      `SELECT * FROM rehearsals 
+       WHERE ensemble_id = $1 AND date >= CURRENT_DATE
+       ORDER BY date ASC, start_time ASC
+       LIMIT 10`,
+      [ensembleId]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error in /api/students/rehearsals:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
