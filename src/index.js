@@ -57,6 +57,63 @@ async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_roster_email ON roster(email);
     `);
 
+    // Auto-attendance system tables
+    // 1. Create beacons table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS beacons (
+        id SERIAL PRIMARY KEY,
+        identifier TEXT UNIQUE NOT NULL,
+        label TEXT NOT NULL,
+        room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 2. Create auto_attendance_sessions table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS auto_attendance_sessions (
+        id SERIAL PRIMARY KEY,
+        event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+        beacon_id INTEGER REFERENCES beacons(id) ON DELETE CASCADE,
+        started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        ended_at TIMESTAMP WITH TIME ZONE,
+        is_active BOOLEAN DEFAULT true,
+        created_by INTEGER REFERENCES users(id)
+      );
+    `);
+
+    // 3. Add source column to attendance table if it doesn't exist
+    const sourceColumnExists = await pool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'attendance' AND column_name = 'source';
+    `);
+
+    if (sourceColumnExists.rows.length === 0) {
+      await pool.query(`
+        ALTER TABLE attendance 
+        ADD COLUMN source TEXT DEFAULT 'manual';
+      `);
+    }
+
+    // 4. Add index on attendance (event_id, student_id) for faster lookups
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_attendance_event_student 
+      ON attendance(event_id, student_id);
+    `);
+
+    // 5. Seed test beacon if it doesn't exist
+    const existingBeacon = await pool.query(`
+      SELECT id FROM beacons WHERE identifier = 'TEST_BEACON_UUID';
+    `);
+
+    if (existingBeacon.rows.length === 0) {
+      await pool.query(`
+        INSERT INTO beacons (identifier, label) 
+        VALUES ('TEST_BEACON_UUID', 'Choir Room A (Test)');
+      `);
+    }
+
     console.log('✅ Database migrations completed');
   } catch (err) {
     console.error('❌ Migration error:', err);
@@ -4447,6 +4504,443 @@ app.get('/api/students/rehearsals', async (req, res) => {
   } catch (err) {
     console.error('Error in /api/students/rehearsals:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== AUTO-ATTENDANCE & BEACON ENDPOINTS ====================
+
+// Get all beacons (director only)
+app.get('/api/beacons', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT b.*, r.name as room_name
+      FROM beacons b
+      LEFT JOIN rooms r ON b.room_id = r.id
+      ORDER BY b.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching beacons:', err);
+    res.status(500).json({ error: 'Failed to fetch beacons' });
+  }
+});
+
+// Create new beacon (director only)
+app.post('/api/beacons', async (req, res) => {
+  try {
+    const { identifier, label, room_id } = req.body;
+
+    if (!identifier || !label) {
+      return res.status(400).json({ error: 'identifier and label are required' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO beacons (identifier, label, room_id)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [identifier, label, room_id || null]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating beacon:', err);
+    if (err.code === '23505') { // Unique violation
+      return res.status(409).json({ error: 'Beacon with this identifier already exists' });
+    }
+    res.status(500).json({ error: 'Failed to create beacon' });
+  }
+});
+
+// Update beacon (director only)
+app.patch('/api/beacons/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { identifier, label, room_id } = req.body;
+
+    const result = await pool.query(
+      `UPDATE beacons
+       SET identifier = COALESCE($1, identifier),
+           label = COALESCE($2, label),
+           room_id = COALESCE($3, room_id)
+       WHERE id = $4
+       RETURNING *`,
+      [identifier, label, room_id, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Beacon not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating beacon:', err);
+    res.status(500).json({ error: 'Failed to update beacon' });
+  }
+});
+
+// Delete beacon (director only)
+app.delete('/api/beacons/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query('DELETE FROM beacons WHERE id = $1 RETURNING id', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Beacon not found' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting beacon:', err);
+    res.status(500).json({ error: 'Failed to delete beacon' });
+  }
+});
+
+// Start auto-attendance session for an event (director only)
+app.post('/api/events/:eventId/auto-attendance/start', async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { beacon_identifier } = req.body;
+
+    if (!beacon_identifier) {
+      return res.status(400).json({ error: 'beacon_identifier is required' });
+    }
+
+    // Look up beacon
+    const beaconResult = await pool.query(
+      'SELECT * FROM beacons WHERE identifier = $1',
+      [beacon_identifier]
+    );
+
+    if (beaconResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Beacon not found' });
+    }
+
+    const beacon = beaconResult.rows[0];
+
+    // Deactivate any existing active sessions for this event
+    await pool.query(
+      `UPDATE auto_attendance_sessions
+       SET is_active = false, ended_at = CURRENT_TIMESTAMP
+       WHERE event_id = $1 AND is_active = true`,
+      [eventId]
+    );
+
+    // Create new session
+    const sessionResult = await pool.query(
+      `INSERT INTO auto_attendance_sessions (event_id, beacon_id, is_active)
+       VALUES ($1, $2, true)
+       RETURNING *`,
+      [eventId, beacon.id]
+    );
+
+    res.json({
+      session: sessionResult.rows[0],
+      beacon: beacon
+    });
+  } catch (err) {
+    console.error('Error starting auto-attendance:', err);
+    res.status(500).json({ error: 'Failed to start auto-attendance' });
+  }
+});
+
+// Stop auto-attendance session for an event (director only)
+app.post('/api/events/:eventId/auto-attendance/stop', async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    const result = await pool.query(
+      `UPDATE auto_attendance_sessions
+       SET is_active = false, ended_at = CURRENT_TIMESTAMP
+       WHERE event_id = $1 AND is_active = true
+       RETURNING *`,
+      [eventId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No active session found for this event' });
+    }
+
+    res.json({ success: true, session: result.rows[0] });
+  } catch (err) {
+    console.error('Error stopping auto-attendance:', err);
+    res.status(500).json({ error: 'Failed to stop auto-attendance' });
+  }
+});
+
+// Get auto-attendance status for an event (director only)
+app.get('/api/events/:eventId/auto-attendance/status', async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    const result = await pool.query(
+      `SELECT s.*, b.identifier, b.label as beacon_label
+       FROM auto_attendance_sessions s
+       JOIN beacons b ON s.beacon_id = b.id
+       WHERE s.event_id = $1 AND s.is_active = true
+       LIMIT 1`,
+      [eventId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ is_active: false });
+    }
+
+    res.json({
+      is_active: true,
+      session: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error fetching auto-attendance status:', err);
+    res.status(500).json({ error: 'Failed to fetch status' });
+  }
+});
+
+// Student auto check-in (student auth required)
+app.post('/api/auto-attendance/check-in', async (req, res) => {
+  try {
+    const { beacon_identifier } = req.body;
+
+    if (!beacon_identifier) {
+      return res.status(400).json({ error: 'beacon_identifier is required' });
+    }
+
+    // Extract student email from auth (simplified - you may have JWT middleware)
+    // For now, assuming email is passed or extracted from token
+    const studentEmail = req.body.student_email || req.user?.email;
+
+    if (!studentEmail) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    // Look up student by email
+    const studentResult = await pool.query(
+      'SELECT id, first_name, last_name FROM roster WHERE LOWER(email) = LOWER($1) LIMIT 1',
+      [studentEmail]
+    );
+
+    if (studentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Student not found' });
+    }
+
+    const student = studentResult.rows[0];
+
+    // Look up beacon
+    const beaconResult = await pool.query(
+      'SELECT * FROM beacons WHERE identifier = $1',
+      [beacon_identifier]
+    );
+
+    if (beaconResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Beacon not found' });
+    }
+
+    const beacon = beaconResult.rows[0];
+
+    // Find active auto-attendance session for this beacon
+    const sessionResult = await pool.query(
+      `SELECT s.*, e.name as event_name, e.start_time
+       FROM auto_attendance_sessions s
+       JOIN events e ON s.event_id = e.id
+       WHERE s.beacon_id = $1 AND s.is_active = true
+       LIMIT 1`,
+      [beacon.id]
+    );
+
+    if (sessionResult.rows.length === 0) {
+      return res.status(400).json({
+        error: 'No active auto-attendance session found for this beacon',
+        beacon_label: beacon.label
+      });
+    }
+
+    const session = sessionResult.rows[0];
+
+    // Upsert attendance record
+    const attendanceResult = await pool.query(
+      `INSERT INTO attendance (event_id, student_id, status, source, timestamp)
+       VALUES ($1, $2, 'present', 'auto_beacon', CURRENT_TIMESTAMP)
+       ON CONFLICT (event_id, student_id) 
+       DO UPDATE SET 
+         status = 'present',
+         source = 'auto_beacon',
+         timestamp = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [session.event_id, student.id]
+    );
+
+    res.json({
+      success: true,
+      event_id: session.event_id,
+      event_name: session.event_name,
+      student_id: student.id,
+      student_name: `${student.first_name} ${student.last_name}`,
+      status: 'present',
+      timestamp: attendanceResult.rows[0].timestamp
+    });
+  } catch (err) {
+    console.error('Error during auto check-in:', err);
+    res.status(500).json({ error: 'Failed to check in' });
+  }
+});
+
+// Get attendance for an event (director only)
+app.get('/api/events/:eventId/attendance', async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    // Get event details
+    const eventResult = await pool.query(
+      'SELECT * FROM events WHERE id = $1',
+      [eventId]
+    );
+
+    if (eventResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const event = eventResult.rows[0];
+
+    // Get all students in the ensemble
+    const studentsResult = await pool.query(
+      `SELECT r.id, r.first_name, r.last_name, r.section, r.part, r.email
+       FROM roster r
+       WHERE r.ensemble_id = $1
+       ORDER BY r.last_name, r.first_name`,
+      [event.ensemble_id]
+    );
+
+    // Get attendance records for this event
+    const attendanceResult = await pool.query(
+      `SELECT student_id, status, source, note, timestamp
+       FROM attendance
+       WHERE event_id = $1`,
+      [eventId]
+    );
+
+    // Create a map of attendance by student_id
+    const attendanceMap = {};
+    attendanceResult.rows.forEach(record => {
+      attendanceMap[record.student_id] = record;
+    });
+
+    // Combine students with their attendance status
+    const attendanceList = studentsResult.rows.map(student => ({
+      ...student,
+      status: attendanceMap[student.id]?.status || 'unmarked',
+      source: attendanceMap[student.id]?.source || null,
+      note: attendanceMap[student.id]?.note || null,
+      timestamp: attendanceMap[student.id]?.timestamp || null
+    }));
+
+    res.json(attendanceList);
+  } catch (err) {
+    console.error('Error fetching event attendance:', err);
+    res.status(500).json({ error: 'Failed to fetch attendance' });
+  }
+});
+
+// Get student's attendance history (student auth required)
+app.get('/api/students/me/attendance', async (req, res) => {
+  try {
+    // Extract student email from auth
+    const studentEmail = req.query.email || req.user?.email;
+
+    if (!studentEmail) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    // Look up student
+    const studentResult = await pool.query(
+      'SELECT id, ensemble_id FROM roster WHERE LOWER(email) = LOWER($1) LIMIT 1',
+      [studentEmail]
+    );
+
+    if (studentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Student not found' });
+    }
+
+    const student = studentResult.rows[0];
+
+    // Get attendance records with event details
+    const result = await pool.query(
+      `SELECT 
+         e.id as event_id,
+         e.name as event_name,
+         e.type as event_type,
+         e.start_time,
+         e.end_time,
+         a.status,
+         a.source,
+         a.timestamp
+       FROM attendance a
+       JOIN events e ON a.event_id = e.id
+       WHERE a.student_id = $1
+       ORDER BY e.start_time DESC`,
+      [student.id]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching student attendance:', err);
+    res.status(500).json({ error: 'Failed to fetch attendance' });
+  }
+});
+
+// Manual attendance override (director only)
+app.patch('/api/attendance/:attendanceId', async (req, res) => {
+  try {
+    const { attendanceId } = req.params;
+    const { status, note } = req.body;
+
+    const result = await pool.query(
+      `UPDATE attendance
+       SET status = COALESCE($1, status),
+           note = COALESCE($2, note),
+           source = 'manual',
+           timestamp = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING *`,
+      [status, note, attendanceId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Attendance record not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating attendance:', err);
+    res.status(500).json({ error: 'Failed to update attendance' });
+  }
+});
+
+// Create manual attendance record (director only)
+app.post('/api/events/:eventId/attendance', async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { student_id, status, note } = req.body;
+
+    if (!student_id || !status) {
+      return res.status(400).json({ error: 'student_id and status are required' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO attendance (event_id, student_id, status, source, note, timestamp)
+       VALUES ($1, $2, $3, 'manual', $4, CURRENT_TIMESTAMP)
+       ON CONFLICT (event_id, student_id)
+       DO UPDATE SET
+         status = $3,
+         source = 'manual',
+         note = $4,
+         timestamp = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [eventId, student_id, status, note || null]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating attendance record:', err);
+    res.status(500).json({ error: 'Failed to create attendance record' });
   }
 });
 
