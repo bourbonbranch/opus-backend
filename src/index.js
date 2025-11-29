@@ -42,6 +42,32 @@ app.use(cors({
   credentials: true
 }));
 
+// Run database migrations on startup
+async function runMigrations() {
+  try {
+    console.log('Running database migrations...');
+
+    // Add email column to roster table if it doesn't exist
+    await pool.query(`
+      ALTER TABLE roster 
+      ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_roster_email ON roster(email);
+    `);
+
+    console.log('✅ Database migrations completed');
+  } catch (err) {
+    console.error('❌ Migration error:', err);
+    // Don't crash the server if migration fails
+  }
+}
+
+// Run migrations
+runMigrations();
+
+
 // Root
 app.get('/', (req, res) => {
   res.json({ ok: true, name: 'Opus API' });
