@@ -4436,9 +4436,9 @@ app.get('/api/students/rehearsals', async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT * FROM rehearsals 
+      `SELECT * FROM calendar_items 
        WHERE ensemble_id = $1 AND date >= CURRENT_DATE
-       ORDER BY date ASC, start_time ASC
+       ORDER BY date ASC
        LIMIT 10`,
       [ensembleId]
     );
