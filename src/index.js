@@ -184,6 +184,89 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
+// General signup (students and directors)
+app.post('/auth/signup', async (req, res) => {
+  try {
+    const { firstName, lastName, email, password, role = 'student' } = req.body;
+
+    if (!firstName || !lastName || !email || !password) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Check if email exists
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+
+    const hashed = await bcrypt.hash(password, 10);
+
+    const result = await pool.query(
+      `INSERT INTO users (first_name, last_name, email, password_hash, role)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, first_name, last_name, email, role`,
+      [firstName, lastName, email, hashed, role]
+    );
+
+    const user = result.rows[0];
+
+    res.status(201).json({
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      role: user.role
+    });
+  } catch (err) {
+    console.error('Error in /auth/signup:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Send app invites to students
+app.post('/api/ensembles/:id/invite', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { studentIds } = req.body; // Array of roster IDs
+
+    if (!studentIds || !Array.isArray(studentIds) || studentIds.length === 0) {
+      return res.status(400).json({ error: 'No students selected' });
+    }
+
+    // Get student emails
+    const result = await pool.query(
+      `SELECT id, first_name, last_name, email 
+       FROM roster 
+       WHERE id = ANY($1) AND ensemble_id = $2`,
+      [studentIds, id]
+    );
+
+    const students = result.rows;
+    const sentCount = students.filter(s => s.email).length;
+    const skippedCount = students.length - sentCount;
+
+    // Mock sending emails
+    console.log(`[INVITE] Sending invites to ${sentCount} students for ensemble ${id}`);
+    students.forEach(s => {
+      if (s.email) {
+        console.log(`[INVITE] Sending email to ${s.email} (${s.first_name} ${s.last_name})`);
+        // In a real app, we would call an email service here (e.g. SendGrid, AWS SES)
+      } else {
+        console.log(`[INVITE] Skipping ${s.first_name} ${s.last_name} (no email)`);
+      }
+    });
+
+    res.json({
+      message: `Invites sent to ${sentCount} students`,
+      sent: sentCount,
+      skipped: skippedCount
+    });
+  } catch (err) {
+    console.error('Error sending invites:', err);
+    res.status(500).json({ error: 'Failed to send invites' });
+  }
+});
+
 // Legacy endpoint kept for compatibility
 app.post('/directors/signup', async (req, res) => {
   try {
