@@ -233,33 +233,54 @@ app.post('/api/ensembles/:id/invite', async (req, res) => {
       return res.status(400).json({ error: 'No students selected' });
     }
 
-    // Get student emails
-    const result = await pool.query(
+    // Get ensemble name and student emails
+    const ensembleResult = await pool.query('SELECT name FROM ensembles WHERE id = $1', [id]);
+    if (ensembleResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Ensemble not found' });
+    }
+    const ensembleName = ensembleResult.rows[0].name;
+
+    const studentsResult = await pool.query(
       `SELECT id, first_name, last_name, email 
        FROM roster 
        WHERE id = ANY($1) AND ensemble_id = $2`,
       [studentIds, id]
     );
 
-    const students = result.rows;
-    const sentCount = students.filter(s => s.email).length;
-    const skippedCount = students.length - sentCount;
+    const students = studentsResult.rows;
+    let sentCount = 0;
+    let skippedCount = 0;
+    const errors = [];
 
-    // Mock sending emails
-    console.log(`[INVITE] Sending invites to ${sentCount} students for ensemble ${id}`);
-    students.forEach(s => {
-      if (s.email) {
-        console.log(`[INVITE] Sending email to ${s.email} (${s.first_name} ${s.last_name})`);
-        // In a real app, we would call an email service here (e.g. SendGrid, AWS SES)
+    // Send emails
+    const { sendAppInvite } = require('./email-service');
+
+    for (const student of students) {
+      if (student.email) {
+        try {
+          await sendAppInvite(
+            student.email,
+            `${student.first_name} ${student.last_name}`,
+            ensembleName
+          );
+          sentCount++;
+          console.log(`[INVITE] Sent email to ${student.email} (${student.first_name} ${student.last_name})`);
+        } catch (error) {
+          console.error(`[INVITE] Failed to send to ${student.email}:`, error.message);
+          errors.push({ email: student.email, error: error.message });
+          skippedCount++;
+        }
       } else {
-        console.log(`[INVITE] Skipping ${s.first_name} ${s.last_name} (no email)`);
+        console.log(`[INVITE] Skipping ${student.first_name} ${student.last_name} (no email)`);
+        skippedCount++;
       }
-    });
+    }
 
     res.json({
-      message: `Invites sent to ${sentCount} students`,
+      message: `Invites sent to ${sentCount} student(s)${skippedCount > 0 ? `, ${skippedCount} skipped` : ''}`,
       sent: sentCount,
-      skipped: skippedCount
+      skipped: skippedCount,
+      errors: errors.length > 0 ? errors : undefined
     });
   } catch (err) {
     console.error('Error sending invites:', err);
