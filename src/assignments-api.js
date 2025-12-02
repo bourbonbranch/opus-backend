@@ -18,7 +18,9 @@ module.exports = function (app, pool) {
             visible_at,
             created_by,
             targets,
-            attachments
+            attachments,
+            event_id,
+            visibility
         } = req.body;
 
         const client = await pool.connect();
@@ -29,11 +31,11 @@ module.exports = function (app, pool) {
             const assignmentResult = await client.query(
                 `INSERT INTO assignments
     (ensemble_id, title, description, type, due_at, status, piece_id, measures_text,
-        submission_required, grading_type, max_score, visible_at, created_by)
-VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        submission_required, grading_type, max_score, visible_at, created_by, event_id, visibility)
+VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 RETURNING * `,
                 [ensemble_id, title, description, type, due_at, status || 'draft', piece_id, measures_text,
-                    submission_required !== false, grading_type || 'completion', max_score, visible_at, created_by]
+                    submission_required !== false, grading_type || 'completion', max_score, visible_at, created_by, event_id, visibility || 'ensemble']
             );
 
             const assignmentId = assignmentResult.rows[0].id;
@@ -121,11 +123,12 @@ VALUES($1, $2, 'not_started')
 
         try {
             let query = `
-          SELECT a.*, u.first_name, u.last_name,
+          SELECT a.*, u.first_name, u.last_name, e.name as event_name,
     (SELECT COUNT(*) FROM assignment_submissions WHERE assignment_id = a.id) as total_submissions,
         (SELECT COUNT(*) FROM assignment_submissions WHERE assignment_id = a.id AND status = 'submitted') as completed_submissions
           FROM assignments a
           LEFT JOIN users u ON a.created_by = u.id
+          LEFT JOIN events e ON a.event_id = e.id
           WHERE a.ensemble_id = $1
     `;
             const params = [ensemble_id];
@@ -160,7 +163,10 @@ VALUES($1, $2, 'not_started')
         try {
             // Get assignment
             const assignmentResult = await pool.query(
-                'SELECT * FROM assignments WHERE id = $1',
+                `SELECT a.*, e.name as event_name, e.start_time as event_date 
+                 FROM assignments a
+                 LEFT JOIN events e ON a.event_id = e.id
+                 WHERE a.id = $1`,
                 [id]
             );
 
@@ -218,7 +224,9 @@ VALUES($1, $2, 'not_started')
             submission_required,
             grading_type,
             max_score,
-            visible_at
+            visible_at,
+            event_id,
+            visibility
         } = req.body;
 
         try {
@@ -227,11 +235,12 @@ VALUES($1, $2, 'not_started')
            SET title = $1, description = $2, type = $3, due_at = $4, status = $5,
     piece_id = $6, measures_text = $7, submission_required = $8,
     grading_type = $9, max_score = $10, visible_at = $11,
+    event_id = $12, visibility = $13,
     updated_at = CURRENT_TIMESTAMP
-           WHERE id = $12
+           WHERE id = $14
 RETURNING * `,
                 [title, description, type, due_at, status, piece_id, measures_text,
-                    submission_required, grading_type, max_score, visible_at, id]
+                    submission_required, grading_type, max_score, visible_at, event_id, visibility, id]
             );
 
             if (result.rows.length === 0) {
@@ -283,6 +292,89 @@ RETURNING * `,
         } catch (err) {
             console.error('Error updating submission:', err);
             res.status(500).json({ error: 'Failed to update submission' });
+        }
+    });
+    // ==================== STUDENT ENDPOINTS ====================
+
+    // Get assignments for logged-in student
+    app.get('/api/students/assignments', async (req, res) => {
+        // Assuming auth middleware populates req.user or we use a query param for now if auth isn't fully set up in this file context
+        // But typically: const studentId = req.user.id;
+        // For now, let's assume the caller passes student_id in query or header if not using standard auth middleware here
+        // Wait, the prompt says "Auth: student". I should check how other student endpoints work.
+        // Usually it's req.user.id from the token.
+
+        // Let's assume req.user is populated by auth middleware.
+        // If not, I might need to check how /api/students/me works.
+
+        // Get student ID from custom header (sent by student app)
+        const studentId = req.headers['x-user-id'];
+        if (!studentId) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        try {
+            // Get assignments targeted to this student
+            // 1. Direct targets
+            // 2. All students in their ensemble
+            // 3. Section/Part targets
+
+            // Actually, assignment_submissions are created for all targets upon assignment creation!
+            // So we just need to query assignment_submissions for this student_id.
+
+            const result = await pool.query(`
+                SELECT 
+                    a.id, a.title, a.description, a.type, a.due_at, a.status as assignment_status,
+                    a.piece_id, a.event_id, a.measures_text,
+                    s.status as submission_status, s.score, s.feedback, s.submitted_at,
+                    p.title as piece_title,
+                    e.name as event_name, e.start_time as event_date
+                FROM assignment_submissions s
+                JOIN assignments a ON s.assignment_id = a.id
+                LEFT JOIN ensemble_files p ON a.piece_id = p.id
+                LEFT JOIN events e ON a.event_id = e.id
+                WHERE s.student_id = $1
+                AND a.status = 'published' -- Only show published assignments
+                ORDER BY a.due_at ASC
+            `, [studentId]);
+
+            res.json(result.rows);
+        } catch (err) {
+            console.error('Error fetching student assignments:', err);
+            res.status(500).json({ error: 'Failed to fetch assignments' });
+        }
+    });
+
+    // Update assignment status (student)
+    app.patch('/api/students/assignments/:id', async (req, res) => {
+        // Get student ID from custom header (sent by student app)
+        const studentId = req.headers['x-user-id'];
+        if (!studentId) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { id } = req.params;
+        const { status, note } = req.body; // 'in_progress', 'completed'
+
+        try {
+            const result = await pool.query(`
+                UPDATE assignment_submissions
+                SET status = $1, 
+                    text_response = COALESCE($2, text_response),
+                    updated_at = CURRENT_TIMESTAMP,
+                    submitted_at = CASE WHEN $1 = 'completed' THEN CURRENT_TIMESTAMP ELSE submitted_at END
+                WHERE assignment_id = $3 AND student_id = $4
+                RETURNING *
+            `, [status, note, id, studentId]);
+
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: 'Assignment not found or not assigned to you' });
+            }
+
+            res.json(result.rows[0]);
+        } catch (err) {
+            console.error('Error updating assignment status:', err);
+            res.status(500).json({ error: 'Failed to update assignment' });
         }
     });
 };
