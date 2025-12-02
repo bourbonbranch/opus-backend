@@ -325,16 +325,18 @@ RETURNING * `,
             const result = await pool.query(`
                 SELECT 
                     a.id, a.title, a.description, a.type, a.due_at, a.status as assignment_status,
-                    a.piece_id, a.event_id, a.measures_text,
-                    s.status as submission_status, s.score, s.feedback, s.submitted_at,
+                    a.piece_id, a.event_id, a.measures_text, a.ensemble_id,
+                    COALESCE(s.status, 'not_started') as submission_status, 
+                    s.score, s.feedback, s.submitted_at,
                     p.title as piece_title,
                     e.name as event_name, e.start_time as event_date
-                FROM assignment_submissions s
-                JOIN assignments a ON s.assignment_id = a.id
+                FROM assignments a
+                LEFT JOIN assignment_submissions s ON s.assignment_id = a.id AND s.student_id = $1
                 LEFT JOIN ensemble_files p ON a.piece_id = p.id
                 LEFT JOIN events e ON a.event_id = e.id
-                WHERE s.student_id = $1
-                AND a.status = 'published' -- Only show published assignments
+                JOIN roster r ON r.ensemble_id = a.ensemble_id AND r.id = $1
+                WHERE a.status = 'active' -- Show active assignments
+                AND (a.visibility = 'ensemble' OR a.visibility = 'public')
                 ORDER BY a.due_at ASC
             `, [studentId]);
 
