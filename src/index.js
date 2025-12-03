@@ -3750,6 +3750,45 @@ app.get('/api/donor-reports/summary', async (req, res) => {
   }
 });
 
+// Create manual donation
+app.post('/api/donations', async (req, res) => {
+  const { donorId, ensembleId, amountCents, donationDate, message, paymentMethod } = req.body;
+
+  if (!donorId || !amountCents) {
+    return res.status(400).json({ error: 'donorId and amountCents are required' });
+  }
+
+  try {
+    const result = await pool.query(`
+      INSERT INTO donations (
+        donor_id, 
+        ensemble_id, 
+        amount_cents, 
+        donation_date, 
+        payment_method, 
+        message,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      RETURNING *
+    `, [
+      donorId,
+      ensembleId,
+      amountCents,
+      donationDate || new Date(),
+      paymentMethod || 'manual',
+      message
+    ]);
+
+    // Fetch updated donor to return fresh stats
+    const updatedDonor = await donorService.getDonorById(donorId);
+    res.json(updatedDonor);
+  } catch (err) {
+    console.error('Error creating donation:', err);
+    res.status(500).json({ error: 'Failed to create donation' });
+  }
+});
+
 // Send donation receipt (stub for now)
 app.post('/api/donations/:id/send-receipt', async (req, res) => {
   const { id } = req.params;
