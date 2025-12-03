@@ -3541,13 +3541,13 @@ app.post('/api/donors', async (req, res) => {
       await donorService.updateDonor(donor.id, { tags, notes });
     }
 
-    // Record initial donation if provided
-    if (initialDonationCents && initialDonationCents > 0) {
-      await pool.query(`
-        INSERT INTO donations (donor_id, ensemble_id, amount_cents, donation_date, payment_method)
-        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, 'manual')
-      `, [donor.id, ensembleId, initialDonationCents]);
-    }
+    // TODO: Record initial donation if provided (requires donations table)
+    // if (initialDonationCents && initialDonationCents > 0) {
+    //   await pool.query(`
+    //     INSERT INTO donations (donor_id, ensemble_id, amount_cents, donation_date, payment_method)
+    //     VALUES ($1, $2, $3, CURRENT_TIMESTAMP, 'manual')
+    //   `, [donor.id, ensembleId, initialDonationCents]);
+    // }
 
     // Fetch the updated donor with donation stats
     const updatedDonor = await donorService.getDonorById(donor.id);
