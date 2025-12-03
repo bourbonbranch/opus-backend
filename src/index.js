@@ -3442,6 +3442,28 @@ app.patch('/api/campaigns/:id', async (req, res) => {
   }
 });
 
+// Delete a campaign
+app.delete('/api/campaigns/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // First delete all participants
+    await pool.query('DELETE FROM campaign_participants WHERE campaign_id = $1', [id]);
+
+    // Then delete the campaign
+    const result = await pool.query('DELETE FROM campaigns WHERE id = $1 RETURNING *', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    res.json({ message: 'Campaign deleted successfully', campaign: result.rows[0] });
+  } catch (err) {
+    console.error('Error deleting campaign:', err);
+    res.status(500).json({ error: 'Failed to delete campaign' });
+  }
+});
+
 
 // --- DONOR CRM MODULE ---
 
