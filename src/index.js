@@ -426,24 +426,63 @@ app.get('/ensembles', async (req, res) => {
 
 // Create a new ensemble
 app.post('/ensembles', async (req, res) => {
+  const client = await pool.connect();
   try {
-    const { name, type, organization_name, level, size, director_id } = req.body;
+    await client.query('BEGIN');
+    const { name, type, organization_name, level, size, director_id, sections } = req.body;
 
     if (!name || !type || !director_id) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Missing required fields: name, type, director_id' });
     }
 
-    const result = await pool.query(
+    const result = await client.query(
       `INSERT INTO ensembles (name, type, organization_name, level, size, director_id)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [name, type, organization_name || null, level || null, size || null, director_id]
     );
 
-    res.status(201).json(result.rows[0]);
+    const ensemble = result.rows[0];
+
+    // Add sections and parts if provided
+    if (sections && Array.isArray(sections) && sections.length > 0) {
+      for (let i = 0; i < sections.length; i++) {
+        const section = sections[i];
+        if (!section.name) continue;
+
+        const sectionResult = await client.query(
+          `INSERT INTO ensemble_sections (ensemble_id, name, display_order)
+           VALUES ($1, $2, $3)
+           RETURNING id`,
+          [ensemble.id, section.name, i]
+        );
+
+        const sectionId = sectionResult.rows[0].id;
+
+        if (section.parts && Array.isArray(section.parts) && section.parts.length > 0) {
+          for (let j = 0; j < section.parts.length; j++) {
+            const partName = typeof section.parts[j] === 'string' ? section.parts[j] : section.parts[j].name;
+            if (!partName) continue;
+
+            await client.query(
+              `INSERT INTO ensemble_parts (section_id, name, display_order)
+               VALUES ($1, $2, $3)`,
+              [sectionId, partName, j]
+            );
+          }
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(ensemble);
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('Error creating ensemble:', err);
     res.status(500).json({ error: 'Failed to create ensemble' });
+  } finally {
+    client.release();
   }
 });
 
@@ -718,6 +757,119 @@ app.get('/api/ensembles/:id/attendance', async (req, res) => {
   } catch (err) {
     console.error('Error fetching attendance:', err);
     res.status(500).json({ error: 'Failed to fetch attendance' });
+  }
+});
+
+// Get absence report
+app.get('/api/ensembles/:id/absences', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { since } = req.query;
+
+    if (!since) {
+      return res.status(400).json({ error: 'since parameter is required (YYYY-MM-DD)' });
+    }
+
+    // Get all active members
+    const members = await pool.query(
+      'SELECT id, first_name, last_name, section, part FROM roster WHERE ensemble_id = $1 AND status = $2 ORDER BY last_name, first_name',
+      [id, 'active']
+    );
+
+    // Get absence counts
+    const absences = await pool.query(`
+      SELECT roster_id, COUNT(*) as count
+      FROM attendance
+      WHERE roster_id = ANY($1) 
+      AND status = 'absent'
+      AND check_in_time >= $2
+      GROUP BY roster_id
+    `, [members.rows.map(m => m.id), since]);
+
+    const absenceMap = {};
+    absences.rows.forEach(a => {
+      absenceMap[a.roster_id] = parseInt(a.count);
+    });
+
+    const report = members.rows.map(member => ({
+      ...member,
+      absence_count: absenceMap[member.id] || 0
+    })).sort((a, b) => b.absence_count - a.absence_count); // Sort by most absences
+
+    res.json(report);
+  } catch (err) {
+    console.error('Error fetching absence report:', err);
+    res.status(500).json({ error: 'Failed to fetch absence report' });
+  }
+});
+
+// Stripe Connect endpoints
+// Get Stripe connection status
+app.get('/api/directors/:id/stripe/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      'SELECT stripe_account_id FROM directors WHERE id = $1',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Director not found' });
+    }
+
+    const stripeAccountId = result.rows[0].stripe_account_id;
+    res.json({
+      connected: !!stripeAccountId,
+      accountId: stripeAccountId
+    });
+  } catch (err) {
+    console.error('Error fetching Stripe status:', err);
+    res.status(500).json({ error: 'Failed to fetch Stripe status' });
+  }
+});
+
+// Initiate Stripe Connect
+app.post('/api/directors/:id/stripe/connect', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, return_url } = req.body;
+
+    // Note: This is a placeholder implementation
+    // In production, you would:
+    // 1. Create a Stripe Connect account link
+    // 2. Return the onboarding URL
+    // 3. Handle the OAuth callback
+    // 4. Store the stripe_account_id in the database
+
+    // For now, return a mock URL
+    // You'll need to implement actual Stripe Connect integration
+    const mockUrl = `https://connect.stripe.com/express/oauth/authorize?client_id=YOUR_CLIENT_ID&state=${id}`;
+
+    res.json({
+      url: mockUrl,
+      message: 'Stripe Connect integration requires Stripe API keys to be configured'
+    });
+  } catch (err) {
+    console.error('Error initiating Stripe Connect:', err);
+    res.status(500).json({ error: 'Failed to initiate Stripe Connect' });
+  }
+});
+
+// Disconnect Stripe account
+app.delete('/api/directors/:id/stripe/disconnect', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await pool.query(
+      'UPDATE directors SET stripe_account_id = NULL WHERE id = $1',
+      [id]
+    );
+
+    res.json({ message: 'Stripe account disconnected successfully' });
+  } catch (err) {
+    console.error('Error disconnecting Stripe:', err);
+    res.status(500).json({ error: 'Failed to disconnect Stripe account' });
   }
 });
 
