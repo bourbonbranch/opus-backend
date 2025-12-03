@@ -3516,7 +3516,7 @@ app.get('/api/donors/:id', async (req, res) => {
 
 // Create donor manually
 app.post('/api/donors', async (req, res) => {
-  const { ensembleId, email, firstName, lastName, organizationName, phone, address, tags, notes } = req.body;
+  const { ensembleId, email, firstName, lastName, organizationName, phone, address, tags, notes, initialDonationCents } = req.body;
 
   if (!ensembleId || !email) {
     return res.status(400).json({ error: 'ensembleId and email are required' });
@@ -3538,11 +3538,20 @@ app.post('/api/donors', async (req, res) => {
 
     // Update tags and notes if provided
     if (tags || notes) {
-      const updated = await donorService.updateDonor(donor.id, { tags, notes });
-      return res.json(updated);
+      await donorService.updateDonor(donor.id, { tags, notes });
     }
 
-    res.json(donor);
+    // Record initial donation if provided
+    if (initialDonationCents && initialDonationCents > 0) {
+      await pool.query(`
+        INSERT INTO donations (donor_id, ensemble_id, amount_cents, donation_date, payment_method)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, 'manual')
+      `, [donor.id, ensembleId, initialDonationCents]);
+    }
+
+    // Fetch the updated donor with donation stats
+    const updatedDonor = await donorService.getDonorById(donor.id);
+    res.json(updatedDonor);
   } catch (err) {
     console.error('Error creating donor:', err);
     res.status(500).json({ error: 'Failed to create donor' });
