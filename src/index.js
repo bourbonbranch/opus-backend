@@ -4731,6 +4731,29 @@ app.get('/api/students/rehearsals', async (req, res) => {
   }
 });
 
+// Create new event
+app.post('/api/events', async (req, res) => {
+  try {
+    const { ensemble_id, room_id, name, type, start_time, end_time, description } = req.body;
+
+    if (!ensemble_id || !name || !type || !start_time || !end_time) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO events (ensemble_id, room_id, name, type, start_time, end_time, description)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [ensemble_id, room_id || null, name, type, start_time, end_time, description]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error creating event:', err);
+    res.status(500).json({ error: 'Failed to create event' });
+  }
+});
+
 // ==================== AUTO-ATTENDANCE & BEACON ENDPOINTS ====================
 
 // Get all beacons (director only)
